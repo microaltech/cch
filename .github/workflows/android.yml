@@ -16,8 +16,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
+      # Runner ubuntu-latest sudah menyertakan Android SDK (ANDROID_HOME); AGP mengunduh platform yang kurang.
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Uji (Robolectric)
