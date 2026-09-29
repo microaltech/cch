@@ -14,6 +14,8 @@ import java.util.ArrayList;
  *   'o' peti bergaris (jadi peti kayu setelah "!" diaktifkan)
  *   'O' peti bergaris di atas jurang (jadi peti besi / batu loncatan)
  *   'X' posisi bos                    'P' pintu area bonus (butuh Def.bonus)
+ *   'J' pinguin (es)                  'V' kelelawar (gua)
+ *   'Y' piranha di air (jurang)       'r' kayu apung yang tenggelam (jurang)
  *   'w' wumpa melayang di atas jurang     'm' pijakan bergerak di atas jurang
  *   'i' peti besi di atas jurang          'b' peti pantul di atas jurang
  */
@@ -33,6 +35,7 @@ final class Level {
         String[] tipTexts = new String[0];
         Def bonus;
         boolean tutorial;
+        boolean water, dark, ice;
 
         Def(String name, Theme theme, int mode, int music, float targetTime, String hint, String... map) {
             this.name = name;
@@ -64,6 +67,24 @@ final class Level {
 
         Def tutorial() {
             tutorial = true;
+            return this;
+        }
+
+        /** Jurang berisi air: jatuh = tercebur. */
+        Def water() {
+            water = true;
+            return this;
+        }
+
+        /** Level gelap, hanya diterangi cahaya di sekitar pemain & obor. */
+        Def dark() {
+            dark = true;
+            return this;
+        }
+
+        /** Lantai es yang licin. */
+        Def ice() {
+            ice = true;
             return this;
         }
     }
@@ -102,7 +123,7 @@ final class Level {
                 char ch = c < line.length() ? line.charAt(c) : ' ';
                 float x = colX(c);
                 float z = r + 0.5f;
-                ground[r][c] = " wmibO".indexOf(ch) < 0;
+                ground[r][c] = " wmibOYr".indexOf(ch) < 0;
                 switch (ch) {
                     case 'S': startX = x; startZ = z; break;
                     case 'X': bossX = x; bossZ = z; break;
@@ -138,6 +159,10 @@ final class Level {
                     case 'H': add(Entity.HOG, x, 0f, z, r, c); break;
                     case 'm': add(Entity.PLATFORM, x, 0f, z, r, c); break;
                     case 'P': add(Entity.PAD, x, 0f, z, r, c); break;
+                    case 'J': add(Entity.PENGUIN, x, 0f, z, r, c); break;
+                    case 'V': add(Entity.BAT, x, 0.9f, z, r, c); break;
+                    case 'Y': add(Entity.PIRANHA, x, -1f, z, r, c); break;
+                    case 'r': add(Entity.SINK, x, 0f, z, r, c); break;
                     default: break;
                 }
             }

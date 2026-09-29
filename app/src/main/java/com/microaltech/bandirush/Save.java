@@ -8,8 +8,9 @@ final class Save {
     static final int RELIC_NONE = 0, RELIC_BRONZE = 1, RELIC_SILVER = 2, RELIC_GOLD = 3;
 
     static final int ST_CRATES = 0, ST_WUMPA = 1, ST_DEATHS = 2, ST_ENEMIES = 3, ST_JUMPS = 4,
-            ST_FLAWLESS = 5, ST_BONUS = 6, ST_CUSTOM = 7, ST_PLAYTIME = 8, ST_COSTUMES = 9;
-    static final int STAT_COUNT = 10;
+            ST_FLAWLESS = 5, ST_BONUS = 6, ST_CUSTOM = 7, ST_PLAYTIME = 8, ST_COSTUMES = 9,
+            ST_DAILY = 10, ST_ENDLESS = 11;
+    static final int STAT_COUNT = 12;
     static final int CUSTOM_SLOTS = 3;
 
     private final SharedPreferences sp;
@@ -19,6 +20,12 @@ final class Save {
     int sfxVol;
     boolean vibrate;
     int btnSize;
+    boolean english;
+    boolean leftHanded;
+    int camDist = 1;   // 0 dekat, 1 normal, 2 jauh
+    int camAngle = 1;  // 0 rendah, 1 normal, 2 tinggi
+    /** Tata letak tombol sentuh kustom: {x, y, skala} per tombol (lompat, spin, luncur, joystick); x<0 = bawaan. */
+    final float[][] layout = new float[4][3];
 
     // progres
     int unlocked;
@@ -36,7 +43,88 @@ final class Save {
         sfxVol = sp.getInt("sfxVol", 8);
         vibrate = sp.getBoolean("vibrate", true);
         btnSize = sp.getInt("btnSize", 1);
+        english = sp.getBoolean("english", false);
+        leftHanded = sp.getBoolean("leftHanded", false);
+        camDist = sp.getInt("camDist", 1);
+        camAngle = sp.getInt("camAngle", 1);
+        for (int i = 0; i < layout.length; i++) {
+            layout[i][0] = sp.getFloat("lay" + i + "x", -1f);
+            layout[i][1] = sp.getFloat("lay" + i + "y", -1f);
+            layout[i][2] = sp.getFloat("lay" + i + "s", 1f);
+        }
         loadProgress();
+    }
+
+    void resetLayout() {
+        for (float[] l : layout) {
+            l[0] = -1f;
+            l[1] = -1f;
+            l[2] = 1f;
+        }
+    }
+
+    // ---------------- skor Tantangan Harian & Tanpa Akhir ----------------
+
+    int dailyBest(int date) {
+        return sp.getInt("daily" + date, 0);
+    }
+
+    /** @return true kalau ini penyelesaian pertama tantangan hari itu. */
+    boolean submitDaily(int date, int score) {
+        boolean first = !sp.contains("daily" + date);
+        if (score > dailyBest(date) || first) sp.edit().putInt("daily" + date, Math.max(score, dailyBest(date))).apply();
+        addTop("topDaily", score, date);
+        return first;
+    }
+
+    int endlessBest() {
+        int[][] t = top("topEndless");
+        return t.length > 0 ? t[0][0] : 0;
+    }
+
+    void submitEndless(int score, int date) {
+        addTop("topEndless", score, date);
+    }
+
+    /** Daftar 5 skor tertinggi: tiap entri {skor, tanggal}. */
+    int[][] top(String key) {
+        String s = sp.getString(key, "");
+        if (s.isEmpty()) return new int[0][];
+        String[] parts = s.split(";");
+        int[][] out = new int[parts.length][2];
+        int n = 0;
+        for (String part : parts) {
+            String[] kv = part.split(":");
+            if (kv.length != 2) continue;
+            try {
+                out[n][0] = Integer.parseInt(kv[0]);
+                out[n][1] = Integer.parseInt(kv[1]);
+                n++;
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        int[][] res = new int[n][];
+        System.arraycopy(out, 0, res, 0, n);
+        return res;
+    }
+
+    private void addTop(String key, int score, int date) {
+        int[][] cur = top(key);
+        java.util.ArrayList<int[]> list = new java.util.ArrayList<>();
+        for (int[] e : cur) list.add(e);
+        list.add(new int[]{score, date});
+        java.util.Collections.sort(list, new java.util.Comparator<int[]>() {
+            @Override
+            public int compare(int[] a, int[] b) {
+                return Integer.compare(b[0], a[0]);
+            }
+        });
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(5, list.size()); i++) {
+            if (i > 0) sb.append(';');
+            sb.append(list.get(i)[0]).append(':').append(list.get(i)[1]);
+        }
+        sp.edit().putString(key, sb.toString()).apply();
     }
 
     private void loadProgress() {
@@ -142,15 +230,22 @@ final class Save {
     }
 
     void saveSettings() {
-        sp.edit()
+        SharedPreferences.Editor e = sp.edit()
                 .putInt("musicVol", musicVol)
                 .putInt("sfxVol", sfxVol)
                 .putBoolean("vibrate", vibrate)
                 .putInt("btnSize", btnSize)
-                .apply();
+                .putBoolean("english", english)
+                .putBoolean("leftHanded", leftHanded)
+                .putInt("camDist", camDist)
+                .putInt("camAngle", camAngle);
+        for (int i = 0; i < layout.length; i++) {
+            e.putFloat("lay" + i + "x", layout[i][0]).putFloat("lay" + i + "y", layout[i][1]).putFloat("lay" + i + "s", layout[i][2]);
+        }
+        e.apply();
     }
 
-    /** Menghapus progres, toko, statistik, dan pencapaian. Pengaturan dan level buatan tetap ada. */
+    /** Menghapus progres, toko, statistik, pencapaian, dan skor. Pengaturan dan level buatan tetap ada. */
     void resetProgress() {
         String[] customs = new String[CUSTOM_SLOTS];
         for (int i = 0; i < CUSTOM_SLOTS; i++) customs[i] = custom(i);

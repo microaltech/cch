@@ -8,6 +8,9 @@ import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
+import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
@@ -37,7 +40,13 @@ import java.util.Random;
 public class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
 
     private static final int ST_TITLE = 0, ST_PLAY = 1, ST_DYING = 2, ST_DONE = 3, ST_OVER = 4,
-            ST_WIN = 5, ST_PAUSE = 6, ST_MAP = 7, ST_SETTINGS = 8, ST_SHOP = 9, ST_ACH = 10, ST_EDITOR = 11;
+            ST_WIN = 5, ST_PAUSE = 6, ST_MAP = 7, ST_SETTINGS = 8, ST_SHOP = 9, ST_ACH = 10, ST_EDITOR = 11,
+            ST_SCORES = 12, ST_LAYOUT = 13;
+    private static final int RUN_STORY = 0, RUN_DAILY = 1, RUN_ENDLESS = 2;
+    private static final float WATER_Y = -0.45f;
+    private static final float[] CAM_DIST = {0.82f, 1f, 1.2f};
+    private static final float[] CAM_PITCH = {-0.06f, 0f, 0.08f};
+    private static final float[] CAM_UP = {-0.35f, 0f, 0.5f};
 
     // Fisika (satuan: 1 unit = 1 petak)
     private static final float GRAVITY = 26f;
@@ -137,6 +146,25 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private volatile float dragX, dragY;
     private volatile boolean dragQueued;
 
+    // ---------- tantangan harian / tanpa akhir ----------
+    private int runMode = RUN_STORY;
+    private int runDate;
+    private float runMaxZ;
+    private int runDeaths, runScore, runBest;
+    private boolean runFirst;
+
+    // ---------- kamera dasar (sebelum pengaturan pemain) ----------
+    private float baseBack = 4.6f, baseUp = 2.7f, basePitch = 0.22f;
+
+    // ---------- cahaya di level gelap ----------
+    private final float[] lightX = new float[48], lightY = new float[48], lightR = new float[48];
+    private int lightCount;
+
+    // ---------- editor tata letak tombol ----------
+    private int layoutSel = -1;
+    private volatile boolean layoutDragQueued;
+    private volatile float layoutDragX, layoutDragY;
+
     // ---------- kamera ----------
     private float camX, camY = 2.7f, camZ;
     private int camDir = 1;
@@ -177,6 +205,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         setFocusableInTouchMode(true);
         requestFocus();
         save = new Save(context);
+        Lang.en = save.english;
         editor = new Editor(save, ui);
         sfx = new Sfx();
         music = new Music();
@@ -219,18 +248,57 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         layoutButtons();
     }
 
+    private volatile float jumpR = 60, spinR = 50, slideR = 40, joyR = 80, joyRestX, joyRestY;
+
+    /** Posisi bawaan tombol: 0 lompat, 1 spin, 2 luncur, 3 joystick. */
+    private float defaultBtnX(int i, float r) {
+        float x;
+        switch (i) {
+            case 0: x = w - r * 1.55f; break;
+            case 1: x = w - r * 3.9f; break;
+            case 2: x = w - r * 1.35f; break;
+            default: x = r * 2.2f; break;
+        }
+        return save.leftHanded ? w - x : x;
+    }
+
+    private float defaultBtnY(int i, float r) {
+        switch (i) {
+            case 0: return h - r * 1.6f;
+            case 1: return h - r * 1.15f;
+            case 2: return h - r * 3.55f;
+            default: return h - r * 2.2f;
+        }
+    }
+
     private void layoutButtons() {
         float k = save.btnSize == 0 ? 0.085f : save.btnSize == 2 ? 0.12f : 0.1f;
         float r = h * k;
         btnR = r;
-        jumpBx = w - r * 1.55f;
-        jumpBy = h - r * 1.6f;
-        spinBx = w - r * 3.9f;
-        spinBy = h - r * 1.15f;
-        slideBx = w - r * 1.35f;
-        slideBy = h - r * 3.55f;
+        float[] bx = new float[4], by = new float[4];
+        for (int i = 0; i < 4; i++) {
+            float[] l = save.layout[i];
+            bx[i] = l[0] >= 0f ? l[0] * w : defaultBtnX(i, r);
+            by[i] = l[0] >= 0f ? l[1] * h : defaultBtnY(i, r);
+        }
+        jumpBx = bx[0];
+        jumpBy = by[0];
+        spinBx = bx[1];
+        spinBy = by[1];
+        slideBx = bx[2];
+        slideBy = by[2];
+        joyRestX = bx[3];
+        joyRestY = by[3];
+        jumpR = r * save.layout[0][2];
+        spinR = r * 0.85f * save.layout[1][2];
+        slideR = r * 0.7f * save.layout[2][2];
+        joyR = r * 1.3f * save.layout[3][2];
         pauseBx = w - h * 0.075f;
         pauseBy = h * 0.075f;
+    }
+
+    private boolean inJoystickZone(float x) {
+        return save.leftHanded ? x > w * 0.5f : x < w * 0.5f;
     }
 
     @Override
@@ -334,8 +402,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void setCamera(int dir, float back, float up, float pitch) {
         camDir = dir;
-        camBack = back;
-        camUp = up;
+        baseBack = back;
+        baseUp = up;
+        basePitch = pitch;
+        applyCameraPrefs();
+    }
+
+    /** Menerapkan pilihan jarak & sudut kamera dari pengaturan. */
+    private void applyCameraPrefs() {
+        int d = Math.max(0, Math.min(2, save.camDist)), a = Math.max(0, Math.min(2, save.camAngle));
+        camBack = baseBack * CAM_DIST[d];
+        camUp = baseUp * CAM_DIST[d] + CAM_UP[a];
+        float pitch = basePitch + CAM_PITCH[a];
         cosP = (float) Math.cos(pitch);
         sinP = (float) Math.sin(pitch);
     }
@@ -381,7 +459,44 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         startDef(Levels.ALL[index], index, timeTrial, false);
     }
 
+    private void startRun(int mode) {
+        runDate = Gen.today();
+        Level.Def def = mode == RUN_DAILY ? Gen.daily(runDate) : Gen.endless(System.nanoTime());
+        startDef(def, -1, false, false);
+        runMode = mode;
+        practice = true;
+        runMaxZ = p.z;
+        runDeaths = 0;
+        runScore = 0;
+        runFirst = false;
+    }
+
+    /** Akhir Tantangan Harian (sampai finish) atau Tanpa Akhir (mati). */
+    private void finishRun() {
+        state = ST_DONE;
+        stateT = 0f;
+        if (runMode == RUN_DAILY) {
+            runScore = Math.max(0, broken * 50 + wumpa * 10 + Math.max(0, 6000 - (int) (ttTime * 40f)) - runDeaths * 250);
+            runFirst = save.submitDaily(runDate, runScore);
+            if (runFirst) bankGain += 50;
+            runBest = save.dailyBest(runDate);
+            save.addStat(Save.ST_DAILY, 1);
+            sfx.play(Sfx.WIN);
+        } else {
+            int dist = (int) Math.max(0f, runMaxZ - level.startZ);
+            runScore = dist * 10 + wumpa * 5 + broken * 20;
+            int prevBest = save.endlessBest();
+            save.submitEndless(runScore, runDate);
+            runFirst = runScore > prevBest;
+            runBest = Math.max(prevBest, runScore);
+            if (dist > save.stats[Save.ST_ENDLESS]) save.stats[Save.ST_ENDLESS] = dist;
+        }
+        flushBank();
+        checkAchievements();
+    }
+
     private void startDef(Level.Def def, int index, boolean timeTrial, boolean isCustom) {
+        runMode = RUN_STORY;
         curDef = def;
         custom = isCustom;
         ttMode = timeTrial;
@@ -447,8 +562,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         particles.clear();
         snapCamera();
         sfx.play(Sfx.POP);
-        showMsg("AREA BONUS!");
+        bannerT = 2.5f;
         hintT = 4f;
+        msgT = 0f;
     }
 
     private void exitBonus(boolean success) {
@@ -480,6 +596,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void completeLevel() {
+        if (runMode != RUN_STORY) {
+            finishRun();
+            return;
+        }
         state = ST_DONE;
         stateT = 0f;
         sfx.play(Sfx.WIN);
@@ -536,6 +656,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             case 12: return save.completed(Levels.indexOfMode(Level.MODE_RIDE));
             case 13: return st[Save.ST_CUSTOM] >= 1;
             case 14: return st[Save.ST_COSTUMES] >= 1;
+            case 15: return st[Save.ST_DAILY] >= 1;
+            case 16: return st[Save.ST_ENDLESS] >= 300;
+            case 17: {
+                int done = 0;
+                for (int k = 0; k < defs.length; k++) {
+                    if ((defs[k].water || defs[k].dark || defs[k].ice) && save.completed(k)) done++;
+                }
+                return done >= 3;
+            }
             default: return false;
         }
     }
@@ -606,8 +735,21 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 if (back) closeSettings();
                 else if (tap) settingsTap(tx, ty);
                 break;
+            case ST_LAYOUT:
+                pauseQueued = false;
+                if (back) {
+                    closeLayout();
+                } else {
+                    if (tap) layoutTap(tx, ty);
+                    if (layoutDragQueued) {
+                        layoutDragQueued = false;
+                        layoutDrag(layoutDragX, layoutDragY);
+                    }
+                }
+                break;
             case ST_SHOP:
             case ST_ACH:
+            case ST_SCORES:
                 pauseQueued = false;
                 updateWorld(dt);
                 camX = (float) Math.sin(time * 0.4f) * 0.6f;
@@ -676,7 +818,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 if ((tap || back) && stateT > 1f) {
                     if (custom) {
                         enterEditor();
-                    } else if (!practice && levelIndex == Levels.ALL.length - 1) {
+                    } else if (!practice && level.mode == Level.MODE_BOSS) {
                         state = ST_WIN;
                         stateT = 0f;
                     } else {
@@ -710,7 +852,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         spinQueued = false;
         boolean slideNow = slideQueued;
         slideQueued = false;
-        if (ttMode) ttTime += dt;
+        if (ttMode || runMode == RUN_DAILY) ttTime += dt;
 
         int steps = Math.max(1, (int) Math.ceil(dt / (1f / 90f)));
         float sdt = dt / steps;
@@ -750,6 +892,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             tipT += dt;
         }
 
+        runMaxZ = Math.max(runMaxZ, p.z);
+        if (level.def.water && p.y < WATER_Y - 0.1f) {
+            // tercebur ke air
+            burst(p.x, WATER_Y, p.z, 0xDDB3E5FC, 18, 4f);
+            sfx.play(Sfx.BREAK);
+            killPlayer(true);
+            return;
+        }
         if (p.y < -4f) {
             killPlayer(true);
             return;
@@ -772,6 +922,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void respawnOrGameOver() {
         if (inBonus) {
             exitBonus(false); // jatuh di area bonus tidak mengurangi nyawa
+            return;
+        }
+        if (runMode == RUN_ENDLESS) {
+            finishRun(); // mode Tanpa Akhir: hanya satu nyawa
             return;
         }
         if (!practice) {
@@ -810,8 +964,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     // =====================================================================
 
     private void cardRect(int i, RectF out) {
-        int cols = 4;
-        float m = w * 0.025f;
+        int cols = 6;
+        float m = w * 0.015f;
         float top = h * 0.17f;
         float cw = (w - m * (cols + 1)) / cols;
         float chh = h * 0.3f;
@@ -820,12 +974,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         out.set(x, y, x + cw, y + chh);
     }
 
-    private static final String[] MAP_BUTTONS = {"TOKO", "PENCAPAIAN", "EDITOR"};
+    private static final String[] MAP_BUTTONS = {"TOKO", "PENCAPAIAN", "EDITOR", "HARIAN", "TANPA AKHIR", "SKOR"};
+    private static final int[] MAP_BUTTON_COLORS = {0xCCEF6C00, 0xCCF9A825, 0xCC00838F, 0xCC6A1B9A, 0xCCC62828, 0xCC2E7D32};
 
     private void mapButtonRect(int i, RectF out) {
-        float bw = w * 0.26f, bh = h * 0.1f;
-        float cxb = w * (0.2f + i * 0.3f);
-        out.set(cxb - bw / 2, h * 0.84f, cxb + bw / 2, h * 0.84f + bh);
+        float m = w * 0.015f;
+        float bw = (w - m * 7) / 6f, bh = h * 0.1f;
+        float x = m + i * (bw + m);
+        out.set(x, h * 0.84f, x + bw, h * 0.84f + bh);
     }
 
     private float ttBtnR(RectF card) {
@@ -848,14 +1004,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             mapButtonRect(i, uiRect);
             if (!uiRect.contains(x, y)) continue;
             sfx.play(Sfx.SELECT);
-            if (i == 0) {
-                state = ST_SHOP;
-                shopSel = -1;
-            } else if (i == 1) {
-                state = ST_ACH;
-            } else {
-                editor.loadSlot(editor.slot);
-                state = ST_EDITOR;
+            switch (i) {
+                case 0: state = ST_SHOP; shopSel = -1; break;
+                case 1: state = ST_ACH; break;
+                case 2: editor.loadSlot(editor.slot); state = ST_EDITOR; break;
+                case 3: startRun(RUN_DAILY); return;
+                case 4: startRun(RUN_ENDLESS); return;
+                default: state = ST_SCORES; break;
             }
             stateT = 0f;
             return;
@@ -891,18 +1046,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         stateT = 0f;
     }
 
+    private static final int SETTING_ROWS = 10;
+
     private float settingsRowY(int i) {
-        return h * (0.27f + i * 0.12f);
+        return h * (0.2f + i * 0.072f);
     }
 
     private void settingsTap(float x, float y) {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < SETTING_ROWS; i++) {
             float ry = settingsRowY(i);
-            if (Math.abs(y - ry) > h * 0.055f) continue;
+            if (Math.abs(y - ry) > h * 0.036f) continue;
             if (i <= 1) {
                 int delta = 0;
-                if (dist(x, y, w * 0.52f, ry) < h * 0.07f) delta = -1;
-                else if (dist(x, y, w * 0.86f, ry) < h * 0.07f) delta = 1;
+                if (dist(x, y, w * 0.52f, ry) < h * 0.06f) delta = -1;
+                else if (dist(x, y, w * 0.86f, ry) < h * 0.06f) delta = 1;
                 if (delta == 0) return;
                 if (i == 0) save.musicVol = Math.max(0, Math.min(10, save.musicVol + delta));
                 else save.sfxVol = Math.max(0, Math.min(10, save.sfxVol + delta));
@@ -912,24 +1069,178 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             }
             if (x < w * 0.48f || x > w * 0.9f) return;
             sfx.play(Sfx.SELECT);
-            if (i == 2) {
-                save.vibrate = !save.vibrate;
-                vibe(60);
-            } else if (i == 3) {
-                save.btnSize = (save.btnSize + 1) % 3;
-                layoutButtons();
-            } else {
-                if (confirmReset) {
-                    save.resetProgress();
-                    confirmReset = false;
-                    showMsg("Progres dihapus");
-                } else {
-                    confirmReset = true;
-                }
+            switch (i) {
+                case 2:
+                    save.vibrate = !save.vibrate;
+                    vibe(60);
+                    break;
+                case 3:
+                    save.btnSize = (save.btnSize + 1) % 3;
+                    layoutButtons();
+                    break;
+                case 4:
+                    layoutSel = -1;
+                    state = ST_LAYOUT;
+                    stateT = 0f;
+                    break;
+                case 5:
+                    save.leftHanded = !save.leftHanded;
+                    save.resetLayout();
+                    layoutButtons();
+                    break;
+                case 6:
+                    save.english = !save.english;
+                    Lang.en = save.english;
+                    break;
+                case 7:
+                    save.camDist = (save.camDist + 1) % 3;
+                    applyCameraPrefs();
+                    break;
+                case 8:
+                    save.camAngle = (save.camAngle + 1) % 3;
+                    applyCameraPrefs();
+                    break;
+                default:
+                    if (confirmReset) {
+                        save.resetProgress();
+                        confirmReset = false;
+                        showMsg("Progres dihapus");
+                    } else {
+                        confirmReset = true;
+                    }
+                    break;
             }
             return;
         }
-        if (Math.abs(y - h * 0.9f) < h * 0.06f && Math.abs(x - w * 0.5f) < w * 0.15f) closeSettings();
+        if (Math.abs(y - h * 0.925f) < h * 0.05f && Math.abs(x - w * 0.5f) < w * 0.15f) closeSettings();
+    }
+
+    // ---------------- editor tata letak tombol ----------------
+
+    private static final String[] LAYOUT_BUTTONS = {"- KECIL", "+ BESAR", "RESET", "SELESAI"};
+
+    private void layoutButtonRect(int i, RectF out) {
+        float bw = w * 0.15f, m = w * 0.02f;
+        float x0 = w * 0.5f - (bw * 4 + m * 3) / 2f + i * (bw + m);
+        out.set(x0, h * 0.2f, x0 + bw, h * 0.29f);
+    }
+
+    private float controlX(int i) {
+        return i == 0 ? jumpBx : i == 1 ? spinBx : i == 2 ? slideBx : joyRestX;
+    }
+
+    private float controlY(int i) {
+        return i == 0 ? jumpBy : i == 1 ? spinBy : i == 2 ? slideBy : joyRestY;
+    }
+
+    private float controlR(int i) {
+        return i == 0 ? jumpR : i == 1 ? spinR : i == 2 ? slideR : joyR;
+    }
+
+    private void layoutTap(float x, float y) {
+        for (int i = 0; i < LAYOUT_BUTTONS.length; i++) {
+            layoutButtonRect(i, uiRect);
+            if (!uiRect.contains(x, y)) continue;
+            sfx.play(Sfx.SELECT);
+            if (i == 3) {
+                closeLayout();
+                return;
+            }
+            if (i == 2) {
+                save.resetLayout();
+                layoutSel = -1;
+            } else if (layoutSel >= 0) {
+                float[] l = save.layout[layoutSel];
+                if (l[0] < 0f) { // simpan posisi saat ini agar ukuran bisa diubah tanpa memindahkan tombol
+                    l[0] = controlX(layoutSel) / w;
+                    l[1] = controlY(layoutSel) / h;
+                }
+                l[2] = Math.max(0.6f, Math.min(1.8f, l[2] + (i == 0 ? -0.1f : 0.1f)));
+            }
+            layoutButtons();
+            return;
+        }
+        int best = -1;
+        float bestD = Float.MAX_VALUE;
+        for (int i = 0; i < 4; i++) {
+            float d = dist(x, y, controlX(i), controlY(i));
+            if (d < controlR(i) * 1.4f && d < bestD) {
+                best = i;
+                bestD = d;
+            }
+        }
+        layoutSel = best;
+    }
+
+    private void layoutDrag(float x, float y) {
+        if (layoutSel < 0) return;
+        float[] l = save.layout[layoutSel];
+        l[0] = Math.max(0.03f, Math.min(0.97f, x / w));
+        l[1] = Math.max(0.3f, Math.min(0.97f, y / h));
+        layoutButtons();
+    }
+
+    private void closeLayout() {
+        save.saveSettings();
+        layoutSel = -1;
+        state = ST_SETTINGS;
+        stateT = 0f;
+    }
+
+    private void drawLayoutEditor() {
+        float u = h * 0.01f;
+        fill.setColor(0x88000000);
+        cv.drawRect(0, 0, w, h, fill);
+        outlined("ATUR TOMBOL", w * 0.5f, h * 0.1f, u * 7, 0xFFFFD54F, Paint.Align.CENTER);
+        outlined("Ketuk tombol lalu seret untuk memindahkan. Pakai - / + untuk ukuran.",
+                w * 0.5f, h * 0.16f, u * 3.8f, 0xFFFFFFFF, Paint.Align.CENTER);
+        for (int i = 0; i < LAYOUT_BUTTONS.length; i++) {
+            layoutButtonRect(i, uiRect);
+            ui.button(uiRect, LAYOUT_BUTTONS[i], i == 3 ? 0xCC2E7D32 : i == 2 ? 0xCCC62828 : 0xCC37474F);
+        }
+        drawControlsAt(false, true, true);
+        if (layoutSel >= 0) {
+            stroke.setColor(0xFFFFEB3B);
+            stroke.setStrokeWidth(u * 0.8f);
+            cv.drawCircle(controlX(layoutSel), controlY(layoutSel), controlR(layoutSel) * 1.12f, stroke);
+        }
+    }
+
+    // ---------------- papan skor ----------------
+
+    private void drawScores() {
+        float u = h * 0.01f;
+        fill.setColor(0xCC000000);
+        cv.drawRect(0, 0, w, h, fill);
+        ui.backButton(h * 0.08f, h * 0.08f, h * 0.055f);
+        outlined("SKOR TERTINGGI", w * 0.5f, h * 0.115f, u * 8, 0xFFFFD54F, Paint.Align.CENTER);
+        int today = Gen.today();
+        for (int col = 0; col < 2; col++) {
+            float x0 = col == 0 ? w * 0.05f : w * 0.53f, x1 = x0 + w * 0.42f;
+            rect.set(x0, h * 0.18f, x1, h * 0.93f);
+            fill.setColor(0xAA1C2A33);
+            cv.drawRoundRect(rect, u * 3, u * 3, fill);
+            boolean daily = col == 0;
+            outlined(daily ? "TANTANGAN HARIAN" : "TANPA AKHIR", (x0 + x1) / 2f, h * 0.26f, u * 5.5f,
+                    daily ? 0xFFCE93D8 : 0xFFFF8A80, Paint.Align.CENTER);
+            String sub = daily
+                    ? "Hari ini (" + Gen.formatDate(today) + "): " + (save.dailyBest(today) > 0 ? String.valueOf(save.dailyBest(today)) : "belum dimainkan")
+                    : "Jarak terjauh: " + save.stats[Save.ST_ENDLESS] + " m";
+            outlined(sub, (x0 + x1) / 2f, h * 0.33f, fitSize(sub, u * 3.8f, x1 - x0 - u * 4), 0xFFE0E0E0, Paint.Align.CENTER);
+            int[][] top = save.top(daily ? "topDaily" : "topEndless");
+            if (top.length == 0) {
+                outlined("Belum ada skor", (x0 + x1) / 2f, h * 0.55f, u * 4.5f, 0xFF90A4AE, Paint.Align.CENTER);
+            }
+            for (int k = 0; k < top.length; k++) {
+                float y = h * (0.44f + k * 0.1f);
+                int medal = k == 0 ? 0xFFFFD700 : k == 1 ? 0xFFE0E0E0 : k == 2 ? 0xFFCD7F32 : 0xFF546E7A;
+                fill.setColor(medal);
+                cv.drawCircle(x0 + u * 6, y - u * 1.6f, u * 2.6f, fill);
+                outlined(String.valueOf(k + 1), x0 + u * 6, y, u * 3.5f, 0xFF212121, Paint.Align.CENTER);
+                outlined(String.valueOf(top[k][0]), x0 + u * 11, y, u * 5, 0xFFFFFFFF, Paint.Align.LEFT);
+                outlined(Gen.formatDate(top[k][1]), x1 - u * 3, y, u * 3.6f, 0xFFB0BEC5, Paint.Align.RIGHT);
+            }
+        }
     }
 
     private void pauseBtnRect(int i, RectF out) {
@@ -1039,7 +1350,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 if (it.kind == Shop.KIND_CHAR) save.selChar = it.id;
                 else save.selCostume = it.id;
                 sfx.play(Sfx.SELECT);
-                showMsg("Dipakai: " + it.name);
+                showMsg(Lang.t("Dipakai: ") + Lang.t(it.name));
             } else if (it.kind == Shop.KIND_MASK && save.startMasks >= Shop.MAX_START_MASKS) {
                 sfx.play(Sfx.HURT);
                 showMsg("Topeng awal sudah penuh (" + Shop.MAX_START_MASKS + ")");
@@ -1049,7 +1360,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             } else {
                 save.bank -= it.price;
                 sfx.play(Sfx.LIFE);
-                showMsg("Dibeli: " + it.name);
+                showMsg(Lang.t("Dibeli: ") + Lang.t(it.name));
                 switch (it.kind) {
                     case Shop.KIND_CHAR:
                         save.owned |= 1 << i;
@@ -1094,8 +1405,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     e.x = (float) Math.sin(e.t * 1.25f + e.phase) * amp;
                     break;
                 }
+                case Entity.SINK: {
+                    // kayu apung: tenggelam pelan saat diinjak, muncul lagi saat ditinggalkan
+                    if (p.standingOn == e && state == ST_PLAY) e.fuse = Math.max(0f, e.fuse) + dt;
+                    else e.fuse = Math.max(0f, e.fuse - dt * 0.7f);
+                    e.y = -Math.max(0f, Math.min(1.5f, e.fuse - 0.8f)) * 0.9f
+                            + (float) Math.sin(e.t * 2f + e.phase) * 0.03f;
+                    break;
+                }
                 case Entity.CRAB:
                 case Entity.HOG:
+                case Entity.PENGUIN:
+                case Entity.BAT:
+                case Entity.PIRANHA:
                     if (e.dieMode == Entity.DIE_KNOCK) {
                         e.x += e.vx * dt;
                         e.z += e.vz * dt;
@@ -1109,6 +1431,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     } else if (e.type == Entity.CRAB) {
                         e.prevX = e.x;
                         e.x = (float) Math.sin(e.t * 1.5f + e.phase) * level.patrolAmp(0.45f);
+                    } else if (e.type == Entity.PENGUIN) {
+                        e.prevX = e.x;
+                        e.x = (float) Math.sin(e.t * 2.4f + e.phase) * level.patrolAmp(0.35f);
+                    } else if (e.type == Entity.BAT) {
+                        e.prevX = e.x;
+                        e.x = (float) Math.sin(e.t * 1.1f + e.phase) * level.patrolAmp(0.4f) * 0.8f;
+                        e.y = 0.9f + (float) Math.sin(e.t * 3f + e.phase) * 0.3f;
+                    } else if (e.type == Entity.PIRANHA) {
+                        float prev = e.y;
+                        e.y = -1f + Math.max(0f, (float) Math.sin(e.t * 2f + e.phase)) * 2.8f;
+                        e.vy = (e.y - prev) / Math.max(dt, 1e-4f);
+                        if (prev < WATER_Y && e.y >= WATER_Y && isVisibleZ(e.z)) {
+                            burst(e.x, WATER_Y, e.z, 0xCCB3E5FC, 6, 2f);
+                        }
                     } else {
                         e.z = e.baseZ + (float) Math.sin(e.t * 1.3f + e.phase) * 1.4f;
                     }
@@ -1147,6 +1483,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 }
             }
         }
+    }
+
+    private boolean isVisibleZ(float z) {
+        float v = (z - camZ) * camDir;
+        return v > 0f && v < VIEW_ROWS;
     }
 
     // ---------------- batu raksasa ----------------
@@ -1414,7 +1755,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             p.vz += (RIDE_SPEED - p.vz) * Math.min(1f, 4f * dt);
         } else {
             float target = runSpeed * (p.longJump ? LONG_JUMP_FACTOR : 1f);
-            float acc = p.grounded ? 14f : (p.longJump ? 2.5f : 7f);
+            float acc = p.grounded ? (level.def.ice ? 2.2f : 14f) : (p.longJump ? 2.5f : 7f);
             float k = Math.min(1f, acc * dt);
             p.vx += (ix * target - p.vx) * k;
             p.vz += (iz * target - p.vz) * k;
@@ -1530,6 +1871,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void moveZ(float dz) {
         float nz = Math.max(0.3f, p.z + dz);
+        if (level.mode == Level.MODE_BOSS) nz = Math.min(nz, level.rows - 0.4f); // arena bos berdinding di ujung
         for (int i = 0, n = level.entities.size(); i < n; i++) {
             Entity e = level.entities.get(i);
             if (!blocksSide(e)) continue;
@@ -1595,6 +1937,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 } else if (e.type == Entity.PLATFORM) {
                     if (Math.abs(p.x - e.x) >= PLAT_HX + 0.12f || Math.abs(p.z - e.z) >= PLAT_HZ + 0.1f) continue;
                     top = 0f;
+                } else if (e.type == Entity.SINK) {
+                    if (Math.abs(p.x - e.x) >= 0.67f || Math.abs(p.z - e.z) >= 0.55f) continue;
+                    top = e.y;
                 } else {
                     continue;
                 }
@@ -1631,6 +1976,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             } else if (e.type == Entity.PLATFORM) {
                 if (Math.abs(p.x - e.x) >= PLAT_HX || Math.abs(p.z - e.z) >= PLAT_HZ) continue;
                 top = 0f;
+            } else if (e.type == Entity.SINK) {
+                if (Math.abs(p.x - e.x) >= 0.55f || Math.abs(p.z - e.z) >= 0.45f) continue;
+                top = e.y;
             } else {
                 continue;
             }
@@ -1728,10 +2076,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 }
             } else if (e.isEnemy()) {
                 if (e.dieMode != Entity.DIE_NONE) continue;
-                if (((spinning && d2 < 1.1f * 1.1f) || (sliding && d2 < 0.9f * 0.9f)) && p.y < 1.1f) {
+                if (e.type == Entity.PIRANHA && e.y < WATER_Y) continue; // masih di dalam air
+                // rentang tinggi tubuh musuh
+                float ey0 = e.type == Entity.BAT ? e.y - 0.15f : e.y;
+                float ey1 = ey0 + (e.type == Entity.BAT ? 0.3f : 0.6f);
+                float ph = playerH();
+                if (((spinning && d2 < 1.1f * 1.1f) || (sliding && d2 < 0.9f * 0.9f))
+                        && p.y < ey1 + 0.3f && p.y + ph > ey0) {
                     knockEnemy(e, dx, dz);
-                } else if (d2 < 0.6f * 0.6f && p.y < 0.8f) {
-                    if (p.vy < -1f && p.y > 0.15f) {
+                } else if (d2 < 0.6f * 0.6f && p.y < ey1 && p.y + ph > ey0) {
+                    if (p.vy < -1f && p.y > ey0 + 0.15f) {
                         e.dieMode = Entity.DIE_SQUASH;
                         e.dieT = 0f;
                         save.addStat(Save.ST_ENEMIES, 1);
@@ -1882,6 +2236,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         p.spinT = 0f;
         p.slideT = 0f;
         diedThisLevel = true;
+        runDeaths++;
         save.addStat(Save.ST_DEATHS, 1);
         sfx.play(Sfx.DIE);
         vibe(200);
@@ -2020,13 +2375,35 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (state == ST_EDITOR) {
             editor.draw(c, w, h, time);
         } else {
+            lightCount = 0;
             drawSky();
             drawWorld();
             drawParticles();
+            if (level.def.dark && state != ST_TITLE && state != ST_MAP) drawDarkness();
             drawHud();
         }
         drawToast();
         cv = null;
+    }
+
+    private final Paint lightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final PorterDuffXfermode dstOut = new PorterDuffXfermode(PorterDuff.Mode.DST_OUT);
+    private static final int[] LIGHT_COLORS = {0xFF000000, 0xB0000000, 0x00000000};
+    private static final float[] LIGHT_STOPS = {0f, 0.55f, 1f};
+
+    /** Level gelap: layar ditutup hitam lalu "dilubangi" cahaya di sekitar Bandi, obor, dan benda bercahaya. */
+    private void drawDarkness() {
+        if (project(p.x, p.y + 0.5f, p.z)) addLight(pX, pY, h * 0.36f);
+        int sc = cv.saveLayer(0, 0, w, h, null);
+        fill.setColor(0xF5000000);
+        cv.drawRect(0, 0, w, h, fill);
+        lightPaint.setXfermode(dstOut);
+        for (int i = 0; i < lightCount; i++) {
+            lightPaint.setShader(new RadialGradient(lightX[i], lightY[i], lightR[i], LIGHT_COLORS, LIGHT_STOPS, Shader.TileMode.CLAMP));
+            cv.drawCircle(lightX[i], lightY[i], lightR[i], lightPaint);
+        }
+        lightPaint.setShader(null);
+        cv.restoreToCount(sc);
     }
 
     private void drawToast() {
@@ -2059,7 +2436,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         fill.setColor(th.fog);
         cv.drawRect(0, horizon, w, h, fill);
 
-        if (th.night) {
+        if (level.def.dark) {
+            // langit-langit gua: tanpa bulan & bintang
+        } else if (th.night) {
             fill.setColor(0xCCFFFFFF);
             for (int i = 0; i < 40; i++) {
                 float sx = ((i * 97 + 13) % 101) / 101f * w;
@@ -2142,7 +2521,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         float playerKey = p.z * camDir;
         if (p.standingOn != null) playerKey = Math.min(playerKey, p.standingOn.z * camDir - 0.01f);
         if (p.y > 0.2f) playerKey = Math.min(playerKey, p.z * camDir - 0.55f);
-        boolean playerDrawn = state == ST_DYING && dieFall && p.y < -3.5f;
+        boolean playerDrawn = state == ST_DYING && dieFall && p.y < (level.def.water ? WATER_Y - 0.3f : -3.5f);
 
         int idx = 0, n = drawList.size();
         int step = camDir > 0 ? -1 : 1;
@@ -2171,11 +2550,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         float hw = level.halfWidth();
         int wd = level.width;
 
-        // dasar jurang
+        // dasar jurang (atau permukaan air di level sungai)
+        boolean water = level.def.water;
+        float pitY = water ? WATER_Y : PIT_Y;
         for (int c = 0; c < wd; c++) {
             if (level.groundAt(r, c)) continue;
             float x0 = level.colX(c) - 0.5f, x1 = x0 + 1f;
-            quad(x0, PIT_Y, z0, x1, PIT_Y, z0, x1, PIT_Y, z1, x0, PIT_Y, z1, th.abyss);
+            int col = water ? shade(th.abyss, 0.88f + 0.12f * (float) Math.sin(time * 2.2f + r * 0.8f + c * 1.3f)) : th.abyss;
+            quad(x0, pitY, z0, x1, pitY, z0, x1, pitY, z1, x0, pitY, z1, col);
+            if (water && ((r * 3 + c) % 4 == 0) && project(level.colX(c) + (float) Math.sin(time + r) * 0.25f, pitY, r + 0.5f)) {
+                stroke.setColor(fog(0x88FFFFFF, pZc));
+                stroke.setStrokeWidth(Math.max(1f, pS * 0.03f));
+                cv.drawLine(pX - pS * 0.2f, pY, pX + pS * 0.2f, pY, stroke);
+            }
         }
 
         // dinding kiri & kanan
@@ -2192,13 +2579,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (!level.groundAt(r, c)) continue;
             float x0 = level.colX(c) - 0.5f, x1 = x0 + 1f;
             if (c + 1 < wd && !level.groundAt(r, c + 1) && camX > x1) {
-                quad(x1, 0, z0, x1, 0, z1, x1, PIT_Y, z1, x1, PIT_Y, z0, shade(th.dirt, 0.8f));
+                quad(x1, 0, z0, x1, 0, z1, x1, pitY, z1, x1, pitY, z0, shade(th.dirt, 0.8f));
             }
             if (c > 0 && !level.groundAt(r, c - 1) && camX < x0) {
-                quad(x0, 0, z1, x0, 0, z0, x0, PIT_Y, z0, x0, PIT_Y, z1, shade(th.dirt, 0.8f));
+                quad(x0, 0, z1, x0, 0, z0, x0, pitY, z0, x0, pitY, z1, shade(th.dirt, 0.8f));
             }
             if (!level.groundAt(nearRow, c)) {
-                quad(x0, 0, zf, x1, 0, zf, x1, PIT_Y, zf, x0, PIT_Y, zf, th.dirt);
+                quad(x0, 0, zf, x1, 0, zf, x1, pitY, zf, x0, pitY, zf, th.dirt);
                 quad(x0, 0.001f, zf, x1, 0.001f, zf, x1, -0.18f, zf, x0, -0.18f, zf, shade(th.groundEdge, 0.85f));
             }
             int col;
@@ -2280,9 +2667,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         cv.drawCircle(tx, ty + 0.12f * s, 0.14f * s, fill);
     }
 
+    private void addLight(float x, float y, float r) {
+        if (lightCount >= lightX.length || r < 2f) return;
+        lightX[lightCount] = x;
+        lightY[lightCount] = y;
+        lightR[lightCount] = r;
+        lightCount++;
+    }
+
     private void drawTorch(float x, float z) {
         if (!project(x, WALL_H, z)) return;
         float bx = pX, by = pY, s = pS, zc = pZc;
+        addLight(bx, by - 1.2f * s, 1.7f * s);
         stroke.setColor(fog(0xFF5D5470, zc));
         stroke.setStrokeWidth(0.35f * s);
         cv.drawLine(bx, by, bx, by - 1.0f * s, stroke);
@@ -2310,8 +2706,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             case Entity.BOSS: drawBoss(); break;
             case Entity.BOMB: drawBomb(e); break;
             case Entity.PAD: drawPad(e); break;
+            case Entity.SINK: drawSink(e); break;
+            case Entity.PENGUIN:
+            case Entity.BAT:
+            case Entity.PIRANHA: drawEnemy(e); break;
             default:
-                if (e.isCrate()) drawCrate(e);
+                if (e.isCrate()) {
+                    // peti tinggi yang sangat dekat kamera dibuat transparan agar tidak menutupi layar
+                    float v = (e.z - camZ) * camDir;
+                    int alpha = e.y + CS > 1.6f && v < 3.2f ? (int) (255 * Math.max(0.3f, Math.min(1f, (v - 1f) / 2.2f))) : 255;
+                    if (alpha < 255) cv.saveLayerAlpha(null, alpha);
+                    drawCrate(e);
+                    if (alpha < 255) cv.restore();
+                }
                 break;
         }
     }
@@ -2524,6 +2931,30 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         cv.drawPath(path, fill);
     }
 
+    /** Kayu apung di sungai. */
+    private void drawSink(Entity e) {
+        float top = e.y;
+        drawBox(e.x - 0.55f, e.x + 0.55f, top - 0.3f, top, e.z - 0.45f, e.z + 0.45f,
+                0xFF6D4C41, 0xFF8D6E63, 0xFF4E342E);
+        if (topOk) {
+            stroke.setColor(fog(0xFF5D4037, boxZc));
+            stroke.setStrokeWidth(Math.max(1f, Math.abs(topX[1] - topX[0]) * 0.025f));
+            for (int k = 1; k < 3; k++) {
+                float t = k / 3f;
+                cv.drawLine(topX[0] + (topX[1] - topX[0]) * t, topY[0] + (topY[1] - topY[0]) * t,
+                        topX[3] + (topX[2] - topX[3]) * t, topY[3] + (topY[2] - topY[3]) * t, stroke);
+            }
+        }
+        if (e.fuse > 0.4f && project(e.x, WATER_Y + 0.05f, e.z)) {
+            // gelembung saat mulai tenggelam
+            fill.setColor(0xCCE1F5FE);
+            for (int k = 0; k < 3; k++) {
+                float ph = (time * 2f + k * 0.33f) % 1f;
+                cv.drawCircle(pX + (k - 1) * pS * 0.3f, pY - ph * pS * 0.4f, pS * 0.05f * (1f - ph), fill);
+            }
+        }
+    }
+
     /** Pintu area bonus: petak bercahaya dengan tanda tanya melayang. */
     private void drawPad(Entity e) {
         float pulse = 0.5f + 0.5f * (float) Math.sin(time * 5f);
@@ -2544,6 +2975,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (e.y < 0.1f) drawShadow(e.x, 0f, e.z, 0.2f);
         if (!project(e.x, wy, e.z)) return;
         float s = pS, r = 0.2f * s;
+        addLight(pX, pY, s * 0.9f);
         float squeeze = 0.55f + 0.45f * Math.abs((float) Math.cos(time * 2.5f + e.phase));
         cv.save();
         cv.translate(pX, pY);
@@ -2579,6 +3011,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         float bob = (float) Math.sin(time * 2f) * 0.12f;
         if (!project(e.x, 1.3f + bob, e.z)) return;
         float s = pS;
+        addLight(pX, pY, s * 3f);
         fill.setColor(0x44FF80AB);
         cv.drawCircle(pX, pY, 0.75f * s * (1f + 0.1f * (float) Math.sin(time * 4f)), fill);
         float sq = 0.3f + 0.7f * Math.abs((float) Math.cos(time * 1.8f));
@@ -2605,7 +3038,10 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void drawEnemy(Entity e) {
-        drawShadow(e.x, 0f, e.z, 0.45f);
+        if (e.type == Entity.PIRANHA && e.y < WATER_Y - 0.2f && e.dieMode == Entity.DIE_NONE) return; // di bawah air
+        if (e.type != Entity.PIRANHA && e.dieMode != Entity.DIE_KNOCK) {
+            drawShadow(e.x, 0f, e.z, e.type == Entity.BAT ? 0.3f : 0.45f);
+        }
         if (!project(e.x, e.y, e.z)) return;
         sprites.fogAmt = fogAmt(pZc);
         cv.save();
@@ -2613,8 +3049,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         cv.scale(pS, pS);
         if (e.dieMode == Entity.DIE_KNOCK) cv.rotate(e.dieT * 720f, 0, -0.3f);
         if (e.dieMode == Entity.DIE_SQUASH) cv.scale(1.3f, 0.3f);
-        if (e.type == Entity.CRAB) sprites.crab(cv, e.t, false, false);
-        else sprites.hog(cv, e.t);
+        switch (e.type) {
+            case Entity.CRAB: sprites.crab(cv, e.t, false, false); break;
+            case Entity.PENGUIN: sprites.penguin(cv, e.t); break;
+            case Entity.BAT: sprites.bat(cv, e.t); break;
+            case Entity.PIRANHA:
+                cv.rotate(e.vy > 0 ? -60f : 60f);
+                cv.scale(1.3f, 1.3f);
+                sprites.piranha(cv, e.t);
+                break;
+            default: sprites.hog(cv, e.t); break;
+        }
         cv.restore();
     }
 
@@ -2756,6 +3201,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     // =====================================================================
 
     private void outlined(String s, float x, float y, float size, int color, Paint.Align align) {
+        s = Lang.t(s);
         text.setTextAlign(align);
         text.setTextSize(size);
         text.setStyle(Paint.Style.STROKE);
@@ -2766,6 +3212,13 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         text.setColor(color);
         cv.drawText(s, x, y, text);
         text.setTextAlign(Paint.Align.CENTER);
+    }
+
+    /** Ukuran huruf yang dikecilkan bila teks lebih lebar dari maxW. */
+    private float fitSize(String s, float size, float maxW) {
+        text.setTextSize(size);
+        float tw = text.measureText(Lang.t(s));
+        return tw > maxW && tw > 0f ? size * maxW / tw : size;
     }
 
     private static String formatTime(float t) {
@@ -2830,6 +3283,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             case ST_SETTINGS: drawSettings(); return;
             case ST_SHOP: drawShop(); return;
             case ST_ACH: drawAchievements(); return;
+            case ST_SCORES: drawScores(); return;
+            case ST_LAYOUT: drawLayoutEditor(); return;
             default: break;
         }
         float u = h * 0.01f;
@@ -2849,13 +3304,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             stroke.setColor(0xFF6B3E1A);
             stroke.setStrokeWidth(u * 0.7f);
             cv.drawRect(bx - u * 2.3f, u * 4.7f, bx + u * 2.3f, u * 9.3f, stroke);
-            outlined(broken + "/" + levelTotal, bx + u * 5, u * 9.6f, u * 7, 0xFFFFFFFF, Paint.Align.LEFT);
+            outlined(runMode == RUN_ENDLESS ? String.valueOf(broken) : broken + "/" + levelTotal,
+                    bx + u * 5, u * 9.6f, u * 7, 0xFFFFFFFF, Paint.Align.LEFT);
             if (inBonus) outlined("AREA BONUS", bx - u * 3, u * 15, u * 4, 0xFF80DEEA, Paint.Align.LEFT);
         }
 
         // petunjuk tutorial
         if (state == ST_PLAY && !inBonus && tipIdx >= 0) {
-            String tip = level.def.tipTexts[tipIdx];
+            String tip = Lang.t(level.def.tipTexts[tipIdx]);
             float a = Math.min(1f, tipT * 3f);
             text.setTextSize(u * 4.4f);
             float tw = text.measureText(tip) + u * 8;
@@ -2867,9 +3323,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         // nyawa atau stopwatch
         float lx = w - u * 34;
-        if (ttMode) {
+        if (ttMode || runMode == RUN_DAILY) {
             drawStopwatch(lx, u * 7, u * 3.5f, 0xFFFFFFFF);
             outlined(formatTime(ttTime), lx + u * 4.5f, u * 9.6f, u * 7, 0xFFFFEB3B, Paint.Align.LEFT);
+        } else if (runMode == RUN_ENDLESS) {
+            outlined((int) Math.max(0f, runMaxZ - level.startZ) + " m", lx + u * 16, u * 9.6f, u * 7, 0xFFFFEB3B, Paint.Align.RIGHT);
         } else {
             fill.setColor(0xFFF57C00);
             cv.drawCircle(lx, u * 7, u * 3.2f, fill);
@@ -2931,6 +3389,24 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 break;
             case ST_DONE: {
                 dim();
+                if (runMode != RUN_STORY) {
+                    boolean daily = runMode == RUN_DAILY;
+                    outlined(daily ? "TANTANGAN SELESAI!" : "LARI SELESAI!", w * 0.5f, h * 0.24f, u * 11, 0xFFFFD54F, Paint.Align.CENTER);
+                    outlined("Skor: " + runScore, w * 0.5f, h * 0.38f, u * 9, 0xFFFFFFFF, Paint.Align.CENTER);
+                    String detail = daily
+                            ? "Waktu " + formatTime(ttTime) + "   Peti " + broken + "/" + levelTotal + "   Wumpa " + wumpa + "   Mati " + runDeaths
+                            : "Jarak " + (int) Math.max(0f, runMaxZ - level.startZ) + " m   Peti " + broken + "   Wumpa " + wumpa;
+                    outlined(detail, w * 0.5f, h * 0.47f, u * 4.8f, 0xFFE0E0E0, Paint.Align.CENTER);
+                    outlined((daily ? "Terbaik hari ini: " : "Rekor: ") + runBest, w * 0.5f, h * 0.56f, u * 5.5f,
+                            runFirst && !daily ? 0xFF76FF03 : 0xFFFFF59D, Paint.Align.CENTER);
+                    if (runFirst) {
+                        outlined(daily ? "Bonus harian pertama: +50 wumpa!" : "REKOR BARU!", w * 0.5f, h * 0.64f, u * 5.5f, 0xFF76FF03, Paint.Align.CENTER);
+                    }
+                    if (stateT > 1f && ((int) (time * 2) & 1) == 0) {
+                        outlined("Ketuk untuk lanjut", w * 0.5f, h * 0.78f, u * 5.5f, 0xFFFFFFFF, Paint.Align.CENTER);
+                    }
+                    break;
+                }
                 outlined(curDef.tutorial ? "TUTORIAL SELESAI!" : "LEVEL SELESAI!", w * 0.5f, h * 0.26f, u * 12, 0xFFFFD54F, Paint.Align.CENTER);
                 if (custom || curDef.tutorial) {
                     outlined(custom ? "Level buatanmu berhasil ditamatkan!" : "Sekarang kamu siap menjelajahi Pulau Wumpa!",
@@ -3033,7 +3509,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 h * 0.16f, h * 0.1f, u * 3.8f, 0xFFE0E0E0, Paint.Align.LEFT);
         for (int i = 0; i < MAP_BUTTONS.length; i++) {
             mapButtonRect(i, uiRect);
-            drawButton(uiRect, MAP_BUTTONS[i], i == 0 ? 0xCCEF6C00 : i == 1 ? 0xCCF9A825 : 0xCC00838F);
+            ui.button(uiRect, MAP_BUTTONS[i], MAP_BUTTON_COLORS[i]);
         }
 
         int n = Levels.ALL.length;
@@ -3054,22 +3530,23 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             int dot = d.name.indexOf(". ");
             String num = dot > 0 ? d.name.substring(0, dot) : d.tutorial ? "T" : String.valueOf(i);
             String nm = dot > 0 ? d.name.substring(dot + 2) : d.name;
-            float lx = uiRect.left + u * 3;
-            outlined(num, lx, uiRect.top + uiRect.height() * 0.36f, uiRect.height() * 0.28f,
-                    open ? 0xFFFFFFFF : 0xFF9E9E9E, Paint.Align.LEFT);
-            outlined(nm, lx, uiRect.top + uiRect.height() * 0.6f, uiRect.height() * 0.13f,
+            float lx = uiRect.left + uiRect.width() * 0.08f;
+            float maxW = uiRect.width() * 0.86f;
+            float ch = uiRect.height();
+            outlined(num, lx, uiRect.top + ch * 0.34f, ch * 0.26f, open ? 0xFFFFFFFF : 0xFF9E9E9E, Paint.Align.LEFT);
+            outlined(nm, lx, uiRect.top + ch * 0.6f, fitSize(nm, ch * 0.12f, maxW),
                     open ? 0xFFFFF59D : 0xFF9E9E9E, Paint.Align.LEFT);
             String tag = d.mode == Level.MODE_BOSS ? "BOS" : d.mode == Level.MODE_CHASE ? "KEJAR"
-                    : d.mode == Level.MODE_RIDE ? "TUNGGANG" : d.bonus != null ? "+BONUS" : "";
+                    : d.mode == Level.MODE_RIDE ? "TUNGGANG" : d.bonus != null ? "+BONUS"
+                    : d.water ? "AIR" : d.dark ? "GELAP" : d.ice ? "ES" : "";
             if (!tag.isEmpty()) {
-                outlined(tag, uiRect.left + uiRect.width() * 0.3f, uiRect.top + uiRect.height() * 0.3f,
-                        uiRect.height() * 0.11f, 0xFFFF8A80, Paint.Align.LEFT);
+                outlined(tag, lx, uiRect.top + ch * 0.73f, fitSize(tag, ch * 0.09f, maxW), 0xFFFF8A80, Paint.Align.LEFT);
             }
 
             if (!open) {
                 // gembok
-                float gx = uiRect.centerX() + uiRect.width() * 0.25f, gy = uiRect.top + uiRect.height() * 0.3f;
-                float gs = uiRect.height() * 0.1f;
+                float gx = uiRect.right - uiRect.width() * 0.22f, gy = uiRect.top + ch * 0.3f;
+                float gs = ch * 0.08f;
                 stroke.setColor(0xFFBDBDBD);
                 stroke.setStrokeWidth(gs * 0.3f);
                 rect.set(gx - gs * 0.6f, gy - gs * 1.3f, gx + gs * 0.6f, gy);
@@ -3079,13 +3556,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 continue;
             }
             if (d.tutorial) {
-                outlined(save.completed(i) ? "SELESAI" : "Mulai di sini!", lx, uiRect.top + uiRect.height() * 0.86f,
-                        uiRect.height() * 0.11f, save.completed(i) ? 0xFF76FF03 : 0xFFFFFFFF, Paint.Align.LEFT);
+                String t = save.completed(i) ? "SELESAI" : "Mulai di sini!";
+                outlined(t, lx, uiRect.top + ch * 0.88f, fitSize(t, ch * 0.1f, maxW),
+                        save.completed(i) ? 0xFF76FF03 : 0xFFFFFFFF, Paint.Align.LEFT);
                 continue;
             }
 
-            float iy = uiRect.top + uiRect.height() * 0.82f;
-            float ir = uiRect.height() * 0.07f;
+            float iy = uiRect.top + ch * 0.87f;
+            float ir = ch * 0.055f;
             // kristal
             float gx = lx + ir;
             fill.setColor(save.gem(i) ? 0xFFFF80D0 : 0x44FFFFFF);
@@ -3100,7 +3578,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             drawRelic(gx + ir * 3.2f, iy, ir, save.relic(i));
             float best = save.best(i);
             if (best > 0f) {
-                outlined(formatTime(best), gx + ir * 5f, iy + ir * 0.5f, uiRect.height() * 0.1f, 0xFFFFFFFF, Paint.Align.LEFT);
+                String bt = formatTime(best);
+                outlined(bt, gx + ir * 5f, iy + ir * 0.5f, fitSize(bt, ch * 0.09f, uiRect.right - gx - ir * 5.5f), 0xFFFFFFFF, Paint.Align.LEFT);
             }
             // tombol Time Trial
             if (save.completed(i)) {
@@ -3194,11 +3673,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         outlined("PENCAPAIAN  " + got + "/" + Achievements.NAMES.length, w * 0.5f, h * 0.115f, u * 7, 0xFFFFD54F, Paint.Align.CENTER);
 
         int cols = 3;
-        float m = w * 0.02f, top = h * 0.17f;
-        float cw = (w - m * (cols + 1)) / cols, chh = h * 0.13f;
+        float m = w * 0.02f, top = h * 0.16f;
+        float cw = (w - m * (cols + 1)) / cols, chh = h * 0.105f;
         for (int i = 0; i < Achievements.NAMES.length; i++) {
             int col = i % cols, row = i / cols;
-            float x = m + col * (cw + m), y = top + row * (chh + h * 0.012f);
+            float x = m + col * (cw + m), y = top + row * (chh + h * 0.01f);
             boolean done = save.hasAch(i);
             rect.set(x, y, x + cw, y + chh);
             fill.setColor(done ? 0xCC33691E : 0xAA263238);
@@ -3213,7 +3692,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         int mins = st[Save.ST_PLAYTIME] / 60;
         outlined("Peti: " + st[Save.ST_CRATES] + "   Wumpa: " + st[Save.ST_WUMPA] + "   Musuh: " + st[Save.ST_ENEMIES]
                         + "   Lompatan: " + st[Save.ST_JUMPS] + "   Mati: " + st[Save.ST_DEATHS]
-                        + "   Waktu main: " + (mins / 60) + "j " + (mins % 60) + "m",
+                        + "   Waktu main: " + (mins / 60) + (Lang.en ? "h " : "j ") + (mins % 60) + "m",
                 w * 0.5f, h * 0.975f, u * 3.6f, 0xFFE0E0E0, Paint.Align.CENTER);
     }
 
@@ -3221,14 +3700,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         float u = h * 0.01f;
         fill.setColor(0xCC000000);
         cv.drawRect(0, 0, w, h, fill);
-        outlined("PENGATURAN", w * 0.5f, h * 0.14f, u * 9, 0xFFFFD54F, Paint.Align.CENTER);
-        String[] labels = {"Musik", "Efek suara", "Getar", "Ukuran tombol", "Hapus progres"};
-        for (int i = 0; i < 5; i++) {
+        outlined("PENGATURAN", w * 0.5f, h * 0.12f, u * 7, 0xFFFFD54F, Paint.Align.CENTER);
+        String[] labels = {"Musik", "Efek suara", "Getar", "Ukuran tombol", "Posisi tombol", "Mode kidal",
+                "Bahasa", "Jarak kamera", "Sudut kamera", "Hapus progres"};
+        for (int i = 0; i < SETTING_ROWS; i++) {
             float y = settingsRowY(i);
-            outlined(labels[i], w * 0.12f, y + u * 2, u * 6, 0xFFFFFFFF, Paint.Align.LEFT);
+            outlined(labels[i], w * 0.12f, y + u * 1.5f, u * 4.4f, 0xFFFFFFFF, Paint.Align.LEFT);
             if (i <= 1) {
                 int v = i == 0 ? save.musicVol : save.sfxVol;
-                float r = h * 0.045f;
+                float r = h * 0.03f;
                 fill.setColor(0xCC455A64);
                 cv.drawCircle(w * 0.52f, y, r, fill);
                 cv.drawCircle(w * 0.86f, y, r, fill);
@@ -3237,46 +3717,59 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 float x0 = w * 0.57f, x1 = w * 0.81f, seg = (x1 - x0) / 10f;
                 for (int k = 0; k < 10; k++) {
                     fill.setColor(k < v ? 0xFF66BB6A : 0x55FFFFFF);
-                    cv.drawRect(x0 + k * seg + seg * 0.12f, y - h * 0.025f, x0 + (k + 1) * seg - seg * 0.12f, y + h * 0.025f, fill);
+                    cv.drawRect(x0 + k * seg + seg * 0.12f, y - h * 0.018f, x0 + (k + 1) * seg - seg * 0.12f, y + h * 0.018f, fill);
                 }
             } else {
                 String val;
-                int col;
-                if (i == 2) {
-                    val = save.vibrate ? "NYALA" : "MATI";
-                    col = save.vibrate ? 0xCC2E7D32 : 0xCC616161;
-                } else if (i == 3) {
-                    val = save.btnSize == 0 ? "KECIL" : save.btnSize == 2 ? "BESAR" : "SEDANG";
-                    col = 0xCC1565C0;
-                } else {
-                    val = confirmReset ? "YAKIN? KETUK LAGI" : "HAPUS";
-                    col = 0xCCC62828;
+                int col = 0xCC1565C0;
+                switch (i) {
+                    case 2:
+                        val = save.vibrate ? "NYALA" : "MATI";
+                        col = save.vibrate ? 0xCC2E7D32 : 0xCC616161;
+                        break;
+                    case 3: val = save.btnSize == 0 ? "KECIL" : save.btnSize == 2 ? "BESAR" : "SEDANG"; break;
+                    case 4: val = "ATUR"; col = 0xCC00838F; break;
+                    case 5:
+                        val = save.leftHanded ? "NYALA" : "MATI";
+                        col = save.leftHanded ? 0xCC2E7D32 : 0xCC616161;
+                        break;
+                    case 6: val = save.english ? "ENGLISH" : "INDONESIA"; break;
+                    case 7: val = save.camDist == 0 ? "DEKAT" : save.camDist == 2 ? "JAUH" : "NORMAL"; break;
+                    case 8: val = save.camAngle == 0 ? "RENDAH" : save.camAngle == 2 ? "TINGGI" : "NORMAL"; break;
+                    default:
+                        val = confirmReset ? "YAKIN? KETUK LAGI" : "HAPUS";
+                        col = 0xCCC62828;
+                        break;
                 }
-                uiRect.set(w * 0.5f, y - h * 0.045f, w * 0.88f, y + h * 0.045f);
-                drawButton(uiRect, val, col);
+                uiRect.set(w * 0.5f, y - h * 0.031f, w * 0.88f, y + h * 0.031f);
+                ui.button(uiRect, val, col);
             }
         }
-        uiRect.set(w * 0.35f, h * 0.85f, w * 0.65f, h * 0.95f);
-        drawButton(uiRect, "KEMBALI", 0xCC2E7D32);
-        if (msgT > 0f) outlined(msg, w * 0.5f, h * 0.8f, u * 5, 0xFFFFF176, Paint.Align.CENTER);
+        uiRect.set(w * 0.38f, h * 0.89f, w * 0.62f, h * 0.96f);
+        ui.button(uiRect, "KEMBALI", 0xCC2E7D32);
+        if (msgT > 0f) outlined(msg, w * 0.5f, h * 0.86f, u * 4, 0xFFFFF176, Paint.Align.CENTER);
     }
 
     private void drawControls() {
-        float r = btnR;
+        drawControlsAt(joyActive, p.spinCd <= 0f, p.slideCd <= 0f);
+    }
+
+    private void drawControlsAt(boolean joyOn, boolean spinReady, boolean slideReady) {
         // joystick
-        float bx = joyActive ? joyBaseX : r * 2.2f;
-        float by = joyActive ? joyBaseY : h - r * 2.2f;
-        float kx = joyActive ? joyKnobX : bx;
-        float ky = joyActive ? joyKnobY : by;
-        fill.setColor(joyActive ? 0x55FFFFFF : 0x33FFFFFF);
-        cv.drawCircle(bx, by, r * 1.3f, fill);
+        float bx = joyOn ? joyBaseX : joyRestX;
+        float by = joyOn ? joyBaseY : joyRestY;
+        float kx = joyOn ? joyKnobX : bx;
+        float ky = joyOn ? joyKnobY : by;
+        fill.setColor(joyOn ? 0x55FFFFFF : 0x33FFFFFF);
+        cv.drawCircle(bx, by, joyR, fill);
         stroke.setColor(0x88FFFFFF);
-        stroke.setStrokeWidth(r * 0.05f);
-        cv.drawCircle(bx, by, r * 1.3f, stroke);
-        fill.setColor(joyActive ? 0xCCFFFFFF : 0x77FFFFFF);
-        cv.drawCircle(kx, ky, r * 0.55f, fill);
+        stroke.setStrokeWidth(joyR * 0.04f);
+        cv.drawCircle(bx, by, joyR, stroke);
+        fill.setColor(joyOn ? 0xCCFFFFFF : 0x77FFFFFF);
+        cv.drawCircle(kx, ky, joyR * 0.42f, fill);
 
         // lompat (X)
+        float r = jumpR;
         fill.setColor(touchJumpHeld ? 0xCC42A5F5 : 0x882196F3);
         cv.drawCircle(jumpBx, jumpBy, r, fill);
         stroke.setColor(0xDDFFFFFF);
@@ -3286,15 +3779,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         cv.drawLine(jumpBx - d, jumpBy + d, jumpBx + d, jumpBy - d, stroke);
 
         // spin (O)
-        fill.setColor(p.spinCd <= 0f ? 0x88E53935 : 0x55E53935);
-        cv.drawCircle(spinBx, spinBy, r * 0.85f, fill);
-        cv.drawCircle(spinBx, spinBy, r * 0.36f, stroke);
+        fill.setColor(spinReady ? 0x88E53935 : 0x55E53935);
+        cv.drawCircle(spinBx, spinBy, spinR, fill);
+        stroke.setStrokeWidth(spinR * 0.14f);
+        cv.drawCircle(spinBx, spinBy, spinR * 0.42f, stroke);
 
         // luncur (segitiga ke bawah)
-        fill.setColor(p.slideCd <= 0f ? 0x8843A047 : 0x5543A047);
-        cv.drawCircle(slideBx, slideBy, r * 0.7f, fill);
+        fill.setColor(slideReady ? 0x8843A047 : 0x5543A047);
+        cv.drawCircle(slideBx, slideBy, slideR, fill);
         fill.setColor(0xDDFFFFFF);
-        float t = r * 0.3f;
+        float t = slideR * 0.43f;
         path.reset();
         path.moveTo(slideBx - t, slideBy - t * 0.6f);
         path.lineTo(slideBx + t, slideBy - t * 0.6f);
@@ -3322,6 +3816,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     dragX = ev.getX(0);
                     dragY = ev.getY(0);
                     dragQueued = true;
+                    break;
+                }
+                if (state == ST_LAYOUT) {
+                    layoutDragX = ev.getX(0);
+                    layoutDragY = ev.getY(0);
+                    layoutDragQueued = true;
                     break;
                 }
                 for (int i = 0; i < ev.getPointerCount(); i++) {
@@ -3359,18 +3859,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             tapQueued = true;
             return;
         }
-        float r = btnR;
         if (dist(x, y, pauseBx, pauseBy) < h * 0.07f) {
             pauseQueued = true;
-        } else if (dist(x, y, jumpBx, jumpBy) < r * 1.3f) {
+        } else if (dist(x, y, jumpBx, jumpBy) < jumpR * 1.3f) {
             jumpId = id;
             touchJumpHeld = true;
             jumpQueued = true;
-        } else if (dist(x, y, slideBx, slideBy) < r * 0.95f) {
+        } else if (dist(x, y, slideBx, slideBy) < slideR * 1.35f) {
             slideQueued = true;
-        } else if (dist(x, y, spinBx, spinBy) < r * 1.15f) {
+        } else if (dist(x, y, spinBx, spinBy) < spinR * 1.35f) {
             spinQueued = true;
-        } else if (x < w * 0.5f && joyId == -1) {
+        } else if (inJoystickZone(x) && joyId == -1) {
             joyId = id;
             joyBaseX = x;
             joyBaseY = y;
@@ -3378,9 +3877,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             joyKnobY = y;
             joyActive = true;
             joyX = joyZ = 0f;
-        } else if (x >= w * 0.5f) {
-            // ketukan lain di sisi kanan: dekat tombol lompat = lompat, selain itu = spin
-            if (x > spinBx + r) {
+        } else if (!inJoystickZone(x)) {
+            // ketukan lain di sisi tombol: lebih dekat ke tombol lompat = lompat, selain itu = spin
+            if (dist(x, y, jumpBx, jumpBy) < dist(x, y, spinBx, spinBy)) {
                 jumpId = id;
                 touchJumpHeld = true;
                 jumpQueued = true;
@@ -3391,7 +3890,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void moveJoystick(float x, float y) {
-        float max = btnR * 1.2f;
+        float max = joyR * 0.92f;
         float dx = x - joyBaseX, dy = y - joyBaseY;
         float d = (float) Math.sqrt(dx * dx + dy * dy);
         if (d > max) {
@@ -3496,6 +3995,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             case ST_SHOP:
             case ST_ACH:
             case ST_EDITOR:
+            case ST_SCORES:
+            case ST_LAYOUT:
                 backQueued = true;
                 return;
             default:

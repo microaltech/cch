@@ -18,7 +18,11 @@ final class Entity {
     static final int WUMPA = 20;
     static final int CRAB = 30;     // kepiting, patroli ke kiri-kanan
     static final int HOG = 31;      // babi hutan, patroli maju-mundur
+    static final int PENGUIN = 32;  // pinguin, meluncur cepat ke kiri-kanan di atas es
+    static final int BAT = 33;      // kelelawar, terbang naik-turun di gua
+    static final int PIRANHA = 34;  // piranha, melompat keluar dari air
     static final int PLATFORM = 40; // pijakan bergerak di atas jurang
+    static final int SINK = 41;     // kayu apung yang tenggelam kalau diinjak terlalu lama
     static final int GOAL = 50;
     static final int BARRIER = 60;  // palang rendah, hanya bisa dilewati sambil meluncur
     static final int BOULDER = 70;  // batu raksasa (hanya untuk gambar)
@@ -57,7 +61,7 @@ final class Entity {
     }
 
     boolean isEnemy() {
-        return type == CRAB || type == HOG;
+        return type >= CRAB && type <= PIRANHA;
     }
 
     boolean isBreakable() {

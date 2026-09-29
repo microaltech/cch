@@ -18,6 +18,9 @@ final class Achievements {
             "Joki Babi",
             "Arsitek",
             "Fashionista",
+            "Pemanasan Harian",
+            "Pelari Jarak Jauh",
+            "Penjelajah Dunia",
     };
 
     static final String[] DESCS = {
@@ -36,6 +39,9 @@ final class Achievements {
             "Selesaikan level tunggangan",
             "Selesaikan level buatanmu",
             "Beli kostum pertama",
+            "Selesaikan Tantangan Harian",
+            "Tempuh 300 m di mode Tanpa Akhir",
+            "Selesaikan Sungai, Gua & Gletser",
     };
 
     private Achievements() {

@@ -57,6 +57,24 @@ final class Theme {
             0xFFB0C4D6, 0xFFA3B8CB, 0xFFF0F6FA, 0xFF2E5E4E, 0xFF5D4037,
             0xFFB8CCE0, 0xFF1A2530, DECOR_PINE, false);
 
+    static final Theme RIVER = new Theme(
+            0xFF4FA3E0, 0xFFD7F0FF, 0xFFBFE3F2,
+            0xFF9CCC65, 0xFF8BC34A, 0xFF689F38, 0xFF5D4037,
+            0xFF33691E, 0xFF3E7A26, 0xFF558B2F, 0xFF2E7D32, 0xFF6D4C41,
+            0xFF81C784, 0xFF1E88E5, DECOR_PALM, false);
+
+    static final Theme CAVE = new Theme(
+            0xFF0B0712, 0xFF1C1326, 0xFF120C18,
+            0xFF7A6A5C, 0xFF6B5C50, 0xFF5E5046, 0xFF3A2F28,
+            0xFF4A3F4F, 0xFF41374A, 0xFF564A5C, 0xFF3E5C3A, 0xFF4E4A5E,
+            0xFF1A1224, 0xFF050308, DECOR_TORCH, true);
+
+    static final Theme ICE = new Theme(
+            0xFF9EC9F0, 0xFFF0F8FF, 0xFFE3F0FA,
+            0xFFD6EEFA, 0xFFC4E4F5, 0xFFB3DAEE, 0xFF6F8FA8,
+            0xFF90B8D8, 0xFF84AECF, 0xFFE8F4FB, 0xFF2E5E4E, 0xFF5D4037,
+            0xFFB0CDE6, 0xFF14202C, DECOR_PINE, false);
+
     static final Theme BEACH = new Theme(
             0xFF1E9FE8, 0xFFB3E5FC, 0xFFB7E3F7,
             0xFFF2D8A0, 0xFFE8CB8C, 0xFFE0BE78, 0xFF9C7A4A,

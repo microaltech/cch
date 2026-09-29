@@ -14,15 +14,17 @@ final class Editor {
     static final int ACT_NONE = 0, ACT_BACK = 1, ACT_PLAY = 2, ACT_COPY = 3, ACT_PASTE = 4;
 
     static final char[] TILES = {'.', ' ', 'S', 'G', 'C', '?', 'B', 'L', 'A', 'T', 'N', 'K', 'I',
-            '2', '3', 'W', 'w', 'E', 'H', 'm', 'U', 'i', 'b', '!', 'o', 'O'};
+            '2', '3', 'W', 'w', 'E', 'H', 'm', 'U', 'i', 'b', '!', 'o', 'O', 'J', 'V', 'Y', 'r'};
     static final String[] TILE_NAMES = {"Tanah", "Jurang", "Posisi awal", "Finish", "Peti kayu", "Peti ?",
             "Peti pantul", "Peti nyawa", "Peti topeng", "TNT", "Nitro", "Checkpoint", "Peti besi",
             "Tumpukan 2 peti", "Tumpukan 3 peti", "Wumpa", "Wumpa melayang", "Kepiting", "Babi hutan",
             "Pijakan bergerak", "Palang rendah", "Besi di atas jurang", "Pantul di atas jurang", "Peti !",
-            "Peti bergaris", "Bergaris di atas jurang"};
-    static final Theme[] THEMES = {Theme.JUNGLE, Theme.SUNSET, Theme.TEMPLE, Theme.SNOW, Theme.BEACH};
-    static final String[] THEME_NAMES = {"Hutan", "Senja", "Kuil", "Salju", "Pantai"};
-    private static final int[] THEME_MUSIC = {Music.JUNGLE, Music.SUNSET, Music.TEMPLE, Music.SNOW, Music.JUNGLE};
+            "Peti bergaris", "Bergaris di atas jurang", "Pinguin", "Kelelawar", "Piranha", "Kayu apung"};
+    static final Theme[] THEMES = {Theme.JUNGLE, Theme.SUNSET, Theme.TEMPLE, Theme.SNOW, Theme.BEACH,
+            Theme.RIVER, Theme.CAVE, Theme.ICE};
+    static final String[] THEME_NAMES = {"Hutan", "Senja", "Kuil", "Salju", "Pantai", "Sungai", "Gua", "Gletser"};
+    private static final int[] THEME_MUSIC = {Music.JUNGLE, Music.SUNSET, Music.TEMPLE, Music.SNOW, Music.JUNGLE,
+            Music.JUNGLE, Music.TEMPLE, Music.SNOW};
     private static final String[] BUTTONS = {"UJI MAIN", "SIMPAN", "LEBAR", "TEMA", "+ BARIS", "- BARIS", "SALIN", "TEMPEL"};
     private static final int MIN_ROWS = 8, MAX_ROWS = 150;
     private static final String HEADER = "BANDIRUSH tema=";
@@ -140,8 +142,12 @@ final class Editor {
         }
         String[] map = new String[rows.size()];
         for (int i = 0; i < rows.size(); i++) map[rows.size() - 1 - i] = new String(rows.get(i));
-        return new Level.Def("Level Kustom " + (slot + 1), THEMES[theme], Level.MODE_NORMAL, THEME_MUSIC[theme], 0f,
+        Level.Def def = new Level.Def("Level Kustom " + (slot + 1), THEMES[theme], Level.MODE_NORMAL, THEME_MUSIC[theme], 0f,
                 "Level buatanmu! Tekan jeda untuk kembali ke editor.", map);
+        if (THEMES[theme] == Theme.RIVER) def.water();
+        if (THEMES[theme] == Theme.CAVE) def.dark();
+        if (THEMES[theme] == Theme.ICE) def.ice();
+        return def;
     }
 
     void showMsg(String m) {
@@ -319,7 +325,7 @@ final class Editor {
         }
         clearRect(r);
         ui.button(r, confirmClear ? "YAKIN?" : "KOSONGKAN", 0xCCC62828);
-        ui.outlined("Tema: " + THEME_NAMES[theme] + "  |  " + width + " x " + rows.size(),
+        ui.outlined(Lang.t("Tema: ") + Lang.t(THEME_NAMES[theme]) + "  |  " + width + " x " + rows.size(),
                 w * 0.98f, h * 0.1f, u * 3.6f, 0xFFB0BEC5, Paint.Align.RIGHT);
 
         // grid
@@ -371,7 +377,7 @@ final class Editor {
                 cv.drawRect(tx + ps * 0.04f, ty + ps * 0.04f, tx + ps * 0.96f, ty + ps * 0.96f, ui.stroke);
             }
         }
-        ui.outlined("Dipilih: " + TILE_NAMES[sel], px0, py0 - u * 1.5f, u * 3.8f, 0xFFFFFFFF, Paint.Align.LEFT);
+        ui.outlined(Lang.t("Dipilih: ") + Lang.t(TILE_NAMES[sel]), px0, py0 - u * 1.5f, u * 3.8f, 0xFFFFFFFF, Paint.Align.LEFT);
 
         for (int i = 0; i < BUTTONS.length; i++) {
             buttonRect(i, r);
@@ -387,8 +393,8 @@ final class Editor {
     }
 
     private void drawTile(Canvas cv, char t, float x, float y, float s) {
-        boolean pit = t == ' ' || t == 'w' || t == 'm' || t == 'i' || t == 'b' || t == 'O';
-        ui.fill.setColor(pit ? 0xFF14231A : 0xFFCFA86E);
+        boolean pit = t == ' ' || t == 'w' || t == 'm' || t == 'i' || t == 'b' || t == 'O' || t == 'Y' || t == 'r';
+        ui.fill.setColor(pit ? (THEMES[theme] == Theme.RIVER ? 0xFF1565C0 : 0xFF14231A) : 0xFFCFA86E);
         cv.drawRect(x, y, x + s, y + s, ui.fill);
         float cx = x + s / 2, cy = y + s / 2, in = s * 0.14f;
         int box = 0;
@@ -437,6 +443,27 @@ final class Editor {
             case 'm':
                 ui.fill.setColor(0xFFA1887F);
                 cv.drawRect(x + in * 0.5f, cy - s * 0.2f, x + s - in * 0.5f, cy + s * 0.2f, ui.fill);
+                break;
+            case 'r':
+                ui.fill.setColor(0xFF6D4C41);
+                cv.drawRoundRect(x + in * 0.5f, cy - s * 0.18f, x + s - in * 0.5f, cy + s * 0.18f, s * 0.15f, s * 0.15f, ui.fill);
+                break;
+            case 'J':
+                ui.fill.setColor(0xFF263238);
+                cv.drawCircle(cx, cy, s * 0.3f, ui.fill);
+                ui.fill.setColor(0xFFFAFAFA);
+                cv.drawCircle(cx, cy + s * 0.05f, s * 0.17f, ui.fill);
+                break;
+            case 'V':
+                ui.fill.setColor(0xFF4A148C);
+                cv.drawCircle(cx, cy, s * 0.14f, ui.fill);
+                cv.drawRect(x + in, cy - s * 0.06f, x + s - in, cy + s * 0.02f, ui.fill);
+                break;
+            case 'Y':
+                ui.fill.setColor(0xFF00897B);
+                cv.drawOval(x + in, cy - s * 0.16f, x + s - in, cy + s * 0.16f, ui.fill);
+                ui.fill.setColor(0xFFFF7043);
+                cv.drawCircle(x + s - in * 1.8f, cy + s * 0.05f, s * 0.08f, ui.fill);
                 break;
             case 'U':
                 ui.fill.setColor(0xFF6D6A7A);

@@ -438,6 +438,100 @@ final class Sprites {
         cv.drawCircle(0.12f, -0.47f, 0.022f, fill);
     }
 
+    void penguin(Canvas cv, float t) {
+        float wob = (float) Math.sin(t * 16f) * 6f;
+        cv.save();
+        cv.rotate(wob, 0f, -0.1f);
+        fill.setColor(f(0xFFFF9800));
+        rect.set(-0.2f, -0.06f, -0.04f, 0.02f);
+        cv.drawOval(rect, fill);
+        rect.set(0.04f, -0.06f, 0.2f, 0.02f);
+        cv.drawOval(rect, fill);
+        fill.setColor(f(0xFF263238));
+        rect.set(-0.24f, -0.72f, 0.24f, -0.02f);
+        cv.drawOval(rect, fill);
+        rect.set(-0.34f, -0.5f, -0.18f, -0.2f);
+        cv.drawOval(rect, fill);
+        rect.set(0.18f, -0.5f, 0.34f, -0.2f);
+        cv.drawOval(rect, fill);
+        fill.setColor(f(0xFFFAFAFA));
+        rect.set(-0.16f, -0.56f, 0.16f, -0.05f);
+        cv.drawOval(rect, fill);
+        fill.setColor(0xFFFFFFFF);
+        cv.drawCircle(-0.07f, -0.58f, 0.045f, fill);
+        cv.drawCircle(0.07f, -0.58f, 0.045f, fill);
+        fill.setColor(0xFF000000);
+        cv.drawCircle(-0.07f, -0.58f, 0.022f, fill);
+        cv.drawCircle(0.07f, -0.58f, 0.022f, fill);
+        fill.setColor(f(0xFFFFA000));
+        path.reset();
+        path.moveTo(-0.05f, -0.52f);
+        path.lineTo(0.05f, -0.52f);
+        path.lineTo(0f, -0.44f);
+        path.close();
+        cv.drawPath(path, fill);
+        cv.restore();
+    }
+
+    void bat(Canvas cv, float t) {
+        float flap = (float) Math.sin(t * 22f);
+        fill.setColor(f(0xFF4A148C));
+        for (int side = -1; side <= 1; side += 2) {
+            path.reset();
+            path.moveTo(side * 0.08f, -0.05f);
+            path.lineTo(side * 0.5f, -0.15f - flap * 0.2f);
+            path.lineTo(side * 0.38f, 0.02f);
+            path.lineTo(side * 0.26f, -0.02f);
+            path.lineTo(side * 0.14f, 0.06f);
+            path.close();
+            cv.drawPath(path, fill);
+        }
+        fill.setColor(f(0xFF311B92));
+        cv.drawCircle(0f, 0f, 0.13f, fill);
+        path.reset();
+        path.moveTo(-0.1f, -0.08f);
+        path.lineTo(-0.07f, -0.2f);
+        path.lineTo(-0.02f, -0.1f);
+        path.close();
+        path.moveTo(0.1f, -0.08f);
+        path.lineTo(0.07f, -0.2f);
+        path.lineTo(0.02f, -0.1f);
+        path.close();
+        cv.drawPath(path, fill);
+        fill.setColor(0xFFFF1744);
+        cv.drawCircle(-0.045f, -0.02f, 0.03f, fill);
+        cv.drawCircle(0.045f, -0.02f, 0.03f, fill);
+    }
+
+    /** Piranha dilihat dari samping; canvas sudah dirotasi sesuai arah lompatan. */
+    void piranha(Canvas cv, float t) {
+        fill.setColor(f(0xFF00897B));
+        path.reset();
+        path.moveTo(-0.34f, 0f);
+        path.lineTo(-0.5f, -0.14f);
+        path.lineTo(-0.5f, 0.14f);
+        path.close();
+        cv.drawPath(path, fill);
+        rect.set(-0.38f, -0.2f, 0.3f, 0.2f);
+        cv.drawOval(rect, fill);
+        fill.setColor(f(0xFFFF7043));
+        rect.set(-0.2f, 0f, 0.26f, 0.18f);
+        cv.drawOval(rect, fill);
+        fill.setColor(0xFFFFFFFF);
+        for (int k = 0; k < 3; k++) {
+            float x = 0.12f + k * 0.06f;
+            path.reset();
+            path.moveTo(x - 0.025f, 0.03f);
+            path.lineTo(x + 0.025f, 0.03f);
+            path.lineTo(x, 0.09f);
+            path.close();
+            cv.drawPath(path, fill);
+        }
+        cv.drawCircle(0.14f, -0.08f, 0.05f, fill);
+        fill.setColor(0xFFD50000);
+        cv.drawCircle(0.15f, -0.08f, 0.025f, fill);
+    }
+
     /** Bintang berputar di atas kepala (pusing). */
     void stars(Canvas cv, float time, float y) {
         fill.setColor(0xFFFFEB3B);

@@ -36,6 +36,16 @@ mengumpulkan buah wumpa, kabur dari batu raksasa, dan melawan Raja Kepiting.
 6. **Kejaran Batu**: kamera berbalik, Bandi berlari *ke arah layar* dikejar batu raksasa.
 7. **Raja Kepiting** (bos): hindari bom yang dilempar dan terjangannya. Saat bos menabrak dinding dan pusing, putar, injak, atau luncur ke arahnya. Butuh 3 pukulan.
 
+### Dunia tambahan (terbuka setelah mengalahkan bos)
+8. **Sungai Deras**: jurang berisi air. **Kayu apung** tenggelam kalau diinjak terlalu lama, dan **piranha** melompat dari air.
+9. **Gua Gelap**: layar gelap gulita, hanya diterangi cahaya di sekitar Bandi, obor, dan wumpa. Ada **kelelawar** yang terbang rendah (meluncur di bawahnya atau putar).
+10. **Gletser Licin**: lantai es membuat Bandi susah berhenti. Ada **pinguin** yang meluncur cepat.
+
+### Tantangan Harian, Tanpa Akhir & Skor
+- **Harian**: level acak yang dibuat otomatis dari tanggal, jadi hari yang sama menghasilkan level yang sama. Skornya dihitung dari peti, wumpa, waktu, dan jumlah mati. Penyelesaian pertama tiap hari memberi bonus 50 wumpa.
+- **Tanpa Akhir**: level super panjang yang makin sulit, dengan satu nyawa. Skor = jarak + wumpa + peti.
+- **Skor**: 5 skor terbaik untuk tiap mode, tersimpan di HP.
+
 ### Area bonus
 Injak petak **BONUS** yang bercahaya untuk masuk ke area rahasia penuh peti. Jatuh di area bonus tidak mengurangi nyawa, kamu hanya kembali ke level utama dan bisa mencoba lagi. Peti di area bonus ikut dihitung untuk kristal.
 
@@ -64,7 +74,7 @@ Buat level sendiri langsung di HP:
 
 ### Suara & pengaturan
 - Musik latar sintetis yang berbeda di tiap dunia (marimba + bongo di hutan, seruling saat senja, lonceng di salju, lagu cepat saat dikejar, lagu bos).
-- Menu **Pengaturan**: volume musik, volume efek suara, getar (nyala/mati), ukuran tombol sentuh (kecil/sedang/besar), dan hapus progres.
+- Menu **Pengaturan**: volume musik & efek suara, getar, ukuran tombol, **posisi tombol** (seret tiap tombol ke mana saja dan atur ukurannya), **mode kidal** (joystick di kanan, tombol di kiri), **bahasa Indonesia / English**, **jarak & sudut kamera**, dan hapus progres.
 - Menu **Jeda**: lanjutkan, pengaturan, atau kembali ke peta.
 - Getar saat terkena serangan, ledakan, dan pukulan ke bos.
 
@@ -97,6 +107,20 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Kebutuhan: JDK 17+, Android SDK Platform 34. Aplikasi berjalan di Android 5.0 (API 21) ke atas.
 
+**Tanpa Android Studio (GitHub Actions)**: setiap push menjalankan `.github/workflows/android.yml`.
+Workflow ini menjalankan semua uji, membuat APK debug, lalu mengunggah **BandiRush-debug-apk** dan
+**screenshots** sebagai artifact. Unduh dari tab *Actions* di GitHub, lalu instal APK-nya di HP.
+
+## Uji otomatis
+
+```bash
+./gradlew testDebugUnitTest
+```
+
+Uji berjalan di JVM memakai Robolectric dengan grafik native, jadi game benar-benar dijalankan tanpa HP:
+- `SmokeTest`: bot sederhana memainkan setiap level, membuka semua layar menu, lalu menyimpan screenshot ke `app/build/shots/`.
+- `MechanicsTest`: memeriksa mekanik tertentu, yaitu meluncur di bawah palang, kayu apung tenggelam, jatuh di area bonus, babi tunggangan menabrak peti besi dan menghancurkan peti kayu, bos bisa dikalahkan dengan 3 pukulan, mode Tanpa Akhir, level Harian yang sama untuk tanggal yang sama, dan kelengkapan terjemahan.
+
 ## Struktur kode
 
 ```
@@ -104,6 +128,8 @@ app/src/main/java/com/microaltech/bandirush/
 ├── MainActivity.java  Activity layar penuh (landscape, imersif)
 ├── GameView.java      Loop game, fisika, kamera, renderer 3D-semu, bos, batu, bonus, HUD, menu, input
 ├── Editor.java        Editor level di dalam game
+├── Gen.java           Pembuat level otomatis (Harian & Tanpa Akhir)
+├── Lang.java          Terjemahan Indonesia -> English
 ├── Sprites.java       Gambar karakter: Bandi/Nia + kostum, kepiting/bos, babi hutan, topeng
 ├── Shop.java          Barang toko, karakter & kostum
 ├── Skin.java          Warna & aksesori karakter
@@ -155,9 +181,11 @@ I  peti besi        W  wumpa             E  kepiting           H  babi hutan
 2  tumpukan 2 peti  3  tumpukan 3 peti   !  peti "!"           U  palang rendah (harus meluncur)
 o  peti bergaris    O  peti bergaris di atas jurang (jadi peti besi)
 X  posisi bos        P  pintu area bonus
+J  pinguin          V  kelelawar         Y  piranha (di air)   r  kayu apung (di air)
 w  wumpa melayang di atas jurang         m  pijakan bergerak di atas jurang
 i  peti besi di atas jurang              b  peti pantul di atas jurang
 ```
 
-Tema: `Theme.JUNGLE`, `SUNSET`, `TEMPLE`, `SNOW`, `BEACH`.
+Tema: `Theme.JUNGLE`, `SUNSET`, `TEMPLE`, `SNOW`, `BEACH`, `RIVER`, `CAVE`, `ICE`.
+Sifat khusus level: `.water()` (jurang berisi air), `.dark()` (gelap), `.ice()` (licin).
 Musik: `Music.JUNGLE`, `SUNSET`, `TEMPLE`, `SNOW`, `CHASE`, `BOSS`.

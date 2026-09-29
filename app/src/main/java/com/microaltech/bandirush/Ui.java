@@ -25,6 +25,7 @@ final class Ui {
     }
 
     void outlined(String s, float x, float y, float size, int color, Paint.Align align) {
+        s = Lang.t(s);
         text.setTextAlign(align);
         text.setTextSize(size);
         text.setStyle(Paint.Style.STROKE);
@@ -44,6 +45,7 @@ final class Ui {
         stroke.setColor(0xCCFFFFFF);
         stroke.setStrokeWidth(r.height() * 0.05f);
         cv.drawRoundRect(r, rr, rr, stroke);
+        label = Lang.t(label);
         float size = Math.min(r.height() * 0.45f, r.width() / Math.max(4, label.length()) * 1.6f);
         outlined(label, r.centerX(), r.centerY() + size * 0.37f, size, 0xFFFFFFFF, Paint.Align.CENTER);
     }
