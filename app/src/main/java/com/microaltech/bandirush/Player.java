@@ -6,8 +6,12 @@ final class Player {
     float vx, vy, vz;
     boolean grounded;
     boolean jumping;
+    boolean longJump;
+    boolean usedAirSpin;
     float airT;
     float spinT, spinCd;
+    float slideT, slideCd;
+    float slideDirX, slideDirZ;
     float facing;
     float runPhase;
     boolean moving;
@@ -24,9 +28,13 @@ final class Player {
         vx = vy = vz = 0f;
         grounded = true;
         jumping = false;
+        longJump = false;
+        usedAirSpin = false;
         airT = 0f;
         spinT = 0f;
         spinCd = 0f;
+        slideT = 0f;
+        slideCd = 0f;
         facing = 0f;
         runPhase = 0f;
         moving = false;

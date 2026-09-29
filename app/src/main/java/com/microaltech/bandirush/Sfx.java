@@ -9,12 +9,14 @@ import java.util.Random;
 /** Efek suara yang disintesis saat runtime, jadi tidak perlu file audio. */
 final class Sfx {
     static final int JUMP = 0, SPIN = 1, BREAK = 2, WUMPA = 3, BOUNCE = 4, BOOM = 5, HURT = 6,
-            LIFE = 7, STOMP = 8, CHECK = 9, WIN = 10, DIE = 11, TICK = 12;
-    private static final int COUNT = 13;
+            LIFE = 7, STOMP = 8, CHECK = 9, WIN = 10, DIE = 11, TICK = 12, SLIDE = 13, ROAR = 14,
+            THROW = 15, POP = 16, SELECT = 17, RUMBLE = 18;
+    private static final int COUNT = 19;
     private static final int RATE = 22050;
     private static final int SINE = 0, SQUARE = 1, TRI = 2;
 
     private final AudioTrack[] tracks = new AudioTrack[COUNT];
+    private volatile float volume = 0.8f;
 
     Sfx() {
         try {
@@ -34,17 +36,28 @@ final class Sfx {
                     note(1046, 0.18f), note(784, 0.1f), note(1046, 0.35f)));
             put(DIE, tone(0.7f, 620, 90, TRI, 0.05f, 0.45f, 0f, false));
             put(TICK, tone(0.05f, 1400, 1400, SQUARE, 0f, 0.15f, 0f, false));
+            put(SLIDE, tone(0.4f, 400, 120, TRI, 0.8f, 0.3f, 0.75f, false));
+            put(ROAR, tone(0.9f, 110, 60, SQUARE, 0.45f, 0.45f, 0.7f, false));
+            put(THROW, tone(0.25f, 700, 250, SINE, 0.3f, 0.3f, 0.3f, false));
+            put(POP, cat(note(784, 0.06f), note(1175, 0.06f), note(1568, 0.12f)));
+            put(SELECT, tone(0.06f, 880, 1200, SQUARE, 0f, 0.14f, 0f, false));
+            put(RUMBLE, tone(1.2f, 60, 40, SINE, 0.85f, 0.8f, 0.92f, false));
         } catch (Throwable ignored) {
             // Audio tidak tersedia (misalnya emulator tanpa audio) - game tetap jalan tanpa suara.
         }
     }
 
+    void setVolume(float v) {
+        volume = v;
+    }
+
     void play(int id) {
         AudioTrack t = tracks[id];
-        if (t == null) return;
+        if (t == null || volume <= 0.001f) return;
         try {
             if (t.getPlayState() != AudioTrack.PLAYSTATE_STOPPED) t.stop();
             t.reloadStaticData();
+            t.setVolume(volume);
             t.play();
         } catch (Exception ignored) {
         }
