@@ -1,5 +1,7 @@
 package com.microaltech.bandirush;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -35,7 +37,7 @@ import java.util.Random;
 public class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
 
     private static final int ST_TITLE = 0, ST_PLAY = 1, ST_DYING = 2, ST_DONE = 3, ST_OVER = 4,
-            ST_WIN = 5, ST_PAUSE = 6, ST_MAP = 7, ST_SETTINGS = 8;
+            ST_WIN = 5, ST_PAUSE = 6, ST_MAP = 7, ST_SETTINGS = 8, ST_SHOP = 9, ST_ACH = 10, ST_EDITOR = 11;
 
     // Fisika (satuan: 1 unit = 1 petak)
     private static final float GRAVITY = 26f;
@@ -56,6 +58,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private static final float EXPLODE_R = 1.7f;
     private static final float BOULDER_R = 2.4f, BOULDER_SPEED = 4.35f, BOULDER_DELAY = 1.6f, BOULDER_GAP = 5.5f;
     private static final float BOMB_R = 1.3f;
+    private static final float RIDE_SPEED = 7.2f, RIDE_SIDE_SPEED = 4.8f;
     private static final int START_LIVES = 4;
 
     // Kamera & render
@@ -110,6 +113,30 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private float boulderT;
     private final Boss boss = new Boss();
 
+    // ---------- level aktif, bonus, toko, pencapaian, editor ----------
+    private final Ui ui = new Ui();
+    private final Editor editor;
+    private Level.Def curDef;
+    private boolean custom, practice;
+    private Level mainLevel;
+    private boolean inBonus;
+    private Entity bonusPad;
+    private int brokenBeforeBonus, maskBeforeBonus;
+    private int levelTotal;
+    private int bankGain;
+    private float playAccum, achTimer;
+    private final ArrayList<String> toasts = new ArrayList<>();
+    private float toastT;
+    private int tipIdx = -1;
+    private float tipT;
+    private float runSpeed = RUN_SPEED, jumpV = JUMP_V;
+    private Skin skin = new Skin();
+    private boolean diedThisLevel;
+    private int shopSel = -1;
+    private volatile String pendingPaste;
+    private volatile float dragX, dragY;
+    private volatile boolean dragQueued;
+
     // ---------- kamera ----------
     private float camX, camY = 2.7f, camZ;
     private int camDir = 1;
@@ -150,6 +177,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         setFocusableInTouchMode(true);
         requestFocus();
         save = new Save(context);
+        editor = new Editor(save, ui);
         sfx = new Sfx();
         music = new Music();
         Vibrator v = null;
@@ -320,25 +348,61 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         particles.clear();
         bombs.clear();
         ttMode = false;
+        custom = false;
+        inBonus = false;
+        mainLevel = null;
+        skin = Shop.skin(save.selChar, save.selCostume);
         snapCamera();
         music.play(Music.JUNGLE);
     }
 
     private void enterMap() {
+        flushBank();
         loadTitleWorld();
         state = ST_MAP;
         stateT = 0f;
+        checkAchievements();
+    }
+
+    private void enterEditor() {
+        flushBank();
+        loadTitleWorld();
+        state = ST_EDITOR;
+        stateT = 0f;
+    }
+
+    private void flushBank() {
+        save.bank += bankGain;
+        bankGain = 0;
+        save.flush();
     }
 
     private void startLevel(int index, boolean timeTrial) {
+        startDef(Levels.ALL[index], index, timeTrial, false);
+    }
+
+    private void startDef(Level.Def def, int index, boolean timeTrial, boolean isCustom) {
+        curDef = def;
+        custom = isCustom;
         ttMode = timeTrial;
+        practice = timeTrial || isCustom || def.tutorial;
         levelIndex = index;
-        level = new Level(Levels.ALL[index]);
+        level = new Level(def);
+        inBonus = false;
+        mainLevel = null;
+        bonusPad = null;
+        levelTotal = level.totalCrates + (def.bonus != null ? new Level(def.bonus).totalCrates : 0);
         switch (level.mode) {
             case Level.MODE_CHASE: setCamera(-1, 7f, 3.6f, 0.33f); break;
             case Level.MODE_BOSS: setCamera(1, 5.6f, 3.5f, 0.3f); break;
+            case Level.MODE_RIDE: setCamera(1, 5.2f, 3.1f, 0.25f); break;
             default: setCamera(1, 4.6f, 2.7f, 0.22f); break;
         }
+        skin = Shop.skin(save.selChar, save.selCostume);
+        runSpeed = Shop.runSpeed(save.selChar);
+        jumpV = Shop.jumpV(save.selChar);
+        diedThisLevel = false;
+        tipIdx = -1;
         p.reset(level.startX, level.startZ);
         checkX = level.startX;
         checkZ = level.startZ;
@@ -362,6 +426,51 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         jumpQueued = spinQueued = slideQueued = false;
         music.play(level.def.music);
         if (level.mode == Level.MODE_BOSS) sfx.play(Sfx.ROAR);
+        if (!practice && save.startMasks > 0) {
+            save.startMasks--;
+            p.mask = 1;
+            showMsg("Topeng dari toko dipakai!");
+        }
+    }
+
+    // ---------------- area bonus ----------------
+
+    private void enterBonus(Entity pad) {
+        bonusPad = pad;
+        mainLevel = level;
+        brokenBeforeBonus = broken;
+        maskBeforeBonus = p.mask;
+        level = new Level(curDef.bonus);
+        inBonus = true;
+        p.reset(level.startX, level.startZ);
+        p.mask = maskBeforeBonus;
+        particles.clear();
+        snapCamera();
+        sfx.play(Sfx.POP);
+        showMsg("AREA BONUS!");
+        hintT = 4f;
+    }
+
+    private void exitBonus(boolean success) {
+        level = mainLevel;
+        mainLevel = null;
+        inBonus = false;
+        if (success) {
+            bonusPad.alive = false;
+            save.addStat(Save.ST_BONUS, 1);
+            showMsg("BONUS SELESAI!");
+            sfx.play(Sfx.CHECK);
+        } else {
+            broken = brokenBeforeBonus;
+            showMsg("Bonus gagal - coba lagi!");
+        }
+        p.reset(bonusPad.x, bonusPad.z + 1.2f);
+        p.mask = maskBeforeBonus;
+        p.invuln = 1f;
+        particles.clear();
+        snapCamera();
+        state = ST_PLAY;
+        stateT = 0f;
     }
 
     private void snapCamera() {
@@ -375,7 +484,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         stateT = 0f;
         sfx.play(Sfx.WIN);
         burst(p.x, 1.2f, p.z + 0.5f * camDir, 0xFFFF80D0, 30, 5f);
-        if (ttMode) {
+        gemThisLevel = false;
+        if (custom) {
+            save.addStat(Save.ST_CUSTOM, 1);
+        } else if (curDef.tutorial) {
+            save.setCompleted(levelIndex);
+        } else if (ttMode) {
             float best = save.best(levelIndex);
             ttNewRecord = best <= 0f || ttTime < best;
             if (ttNewRecord) save.setBest(levelIndex, ttTime);
@@ -385,14 +499,57 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             save.setRelic(levelIndex, ttRelic);
         } else {
             gemThisLevel = level.mode == Level.MODE_BOSS
-                    || (level.totalCrates > 0 && broken >= level.totalCrates);
+                    || (levelTotal > 0 && broken >= levelTotal);
             if (gemThisLevel && !save.gem(levelIndex)) {
                 gemIsNew = true;
                 save.setGem(levelIndex);
             }
             save.setCompleted(levelIndex);
             save.unlock(levelIndex + 2);
+            if (!diedThisLevel) save.addStat(Save.ST_FLAWLESS, 1);
         }
+        flushBank();
+        checkAchievements();
+    }
+
+    // ---------------- pencapaian ----------------
+
+    boolean achievementDone(int i) {
+        Level.Def[] defs = Levels.ALL;
+        int n = Levels.progressCount();
+        int[] st = save.stats;
+        switch (i) {
+            case 0: return save.completed(0);
+            case 1: return save.completed(1);
+            case 2: return st[Save.ST_CRATES] >= 100;
+            case 3: return st[Save.ST_CRATES] >= 500;
+            case 4: return st[Save.ST_WUMPA] >= 500;
+            case 5: return st[Save.ST_FLAWLESS] >= 1;
+            case 6: return save.totalGems(defs) >= n;
+            case 7: return save.completed(Levels.indexOfMode(Level.MODE_BOSS));
+            case 8:
+                for (int k = 0; k < defs.length; k++) if (save.relic(k) == Save.RELIC_GOLD) return true;
+                return false;
+            case 9: return save.totalRelics(defs) >= n;
+            case 10: return st[Save.ST_ENEMIES] >= 50;
+            case 11: return st[Save.ST_BONUS] >= 1;
+            case 12: return save.completed(Levels.indexOfMode(Level.MODE_RIDE));
+            case 13: return st[Save.ST_CUSTOM] >= 1;
+            case 14: return st[Save.ST_COSTUMES] >= 1;
+            default: return false;
+        }
+    }
+
+    private void checkAchievements() {
+        boolean changed = false;
+        for (int i = 0; i < Achievements.NAMES.length; i++) {
+            if (!save.hasAch(i) && achievementDone(i)) {
+                save.setAch(i);
+                toasts.add(Achievements.NAMES[i]);
+                changed = true;
+            }
+        }
+        if (changed) save.flush();
     }
 
     private void update(float dt) {
@@ -401,6 +558,14 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (bannerT > 0) bannerT -= dt;
         if (hintT > 0) hintT -= dt;
         if (msgT > 0) msgT -= dt;
+        if (!toasts.isEmpty()) {
+            if (toastT <= 0f) {
+                toastT = 3f;
+                sfx.play(Sfx.CHECK);
+            }
+            toastT -= dt;
+            if (toastT <= 0f) toasts.remove(0);
+        }
 
         boolean tap = tapQueued;
         tapQueued = false;
@@ -441,11 +606,49 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 if (back) closeSettings();
                 else if (tap) settingsTap(tx, ty);
                 break;
+            case ST_SHOP:
+            case ST_ACH:
+                pauseQueued = false;
+                updateWorld(dt);
+                camX = (float) Math.sin(time * 0.4f) * 0.6f;
+                if (back) {
+                    sfx.play(Sfx.SELECT);
+                    enterMap();
+                } else if (tap) {
+                    if (dist(tx, ty, h * 0.08f, h * 0.08f) < h * 0.08f) {
+                        sfx.play(Sfx.SELECT);
+                        enterMap();
+                    } else if (state == ST_SHOP) {
+                        shopTap(tx, ty);
+                    }
+                }
+                break;
+            case ST_EDITOR: {
+                pauseQueued = false;
+                editor.update(dt);
+                String paste = pendingPaste;
+                if (paste != null) {
+                    pendingPaste = null;
+                    editor.showMsg(editor.load(paste) ? "Level ditempel dari clipboard!" : "Teks di clipboard bukan level Bandi Rush");
+                }
+                if (dragQueued) {
+                    dragQueued = false;
+                    editor.drag(dragX, dragY, w, h);
+                }
+                if (back) {
+                    editor.saveSlot();
+                    enterMap();
+                } else if (tap) {
+                    editorAction(editor.tap(tx, ty, w, h));
+                }
+                break;
+            }
             case ST_PLAY:
                 if (back || pauseQueued) {
                     pauseQueued = false;
                     state = ST_PAUSE;
                     stateT = 0f;
+                    flushBank();
                     break;
                 }
                 updatePlaying(dt);
@@ -471,7 +674,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 updateWorld(dt);
                 updateParticles(dt);
                 if ((tap || back) && stateT > 1f) {
-                    if (!ttMode && levelIndex == Levels.ALL.length - 1) {
+                    if (custom) {
+                        enterEditor();
+                    } else if (!practice && levelIndex == Levels.ALL.length - 1) {
                         state = ST_WIN;
                         stateT = 0f;
                     } else {
@@ -522,12 +727,36 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         updateParticles(dt);
         if (state != ST_PLAY) return;
 
+        playAccum += dt;
+        if (playAccum >= 1f) {
+            playAccum -= 1f;
+            save.addStat(Save.ST_PLAYTIME, 1);
+        }
+        achTimer += dt;
+        if (achTimer > 2f) {
+            achTimer = 0f;
+            checkAchievements();
+        }
+
+        // petunjuk tutorial
+        if (!inBonus) {
+            int[] rows = level.def.tipRows;
+            int idx = -1;
+            for (int i = 0; i < rows.length; i++) if (p.z >= rows[i]) idx = i;
+            if (idx != tipIdx) {
+                tipIdx = idx;
+                tipT = 0f;
+            }
+            tipT += dt;
+        }
+
         if (p.y < -4f) {
             killPlayer(true);
             return;
         }
         if (level.mode != Level.MODE_BOSS && p.z >= level.goalRow + 0.3f) {
-            completeLevel();
+            if (inBonus) exitBonus(true);
+            else completeLevel();
             return;
         }
         updateCamera(dt);
@@ -541,12 +770,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     }
 
     private void respawnOrGameOver() {
-        if (!ttMode) {
+        if (inBonus) {
+            exitBonus(false); // jatuh di area bonus tidak mengurangi nyawa
+            return;
+        }
+        if (!practice) {
             lives--;
             if (lives <= 0) {
                 lives = 0;
                 state = ST_OVER;
                 stateT = 0f;
+                flushBank();
                 music.play(-1);
                 return;
             }
@@ -576,14 +810,22 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     // =====================================================================
 
     private void cardRect(int i, RectF out) {
-        int cols = 3;
-        float m = w * 0.035f;
-        float top = h * 0.19f;
+        int cols = 4;
+        float m = w * 0.025f;
+        float top = h * 0.17f;
         float cw = (w - m * (cols + 1)) / cols;
-        float chh = h * 0.31f;
+        float chh = h * 0.3f;
         int col = i % cols, row = i / cols;
-        float x = m + col * (cw + m), y = top + row * (chh + h * 0.045f);
+        float x = m + col * (cw + m), y = top + row * (chh + h * 0.03f);
         out.set(x, y, x + cw, y + chh);
+    }
+
+    private static final String[] MAP_BUTTONS = {"TOKO", "PENCAPAIAN", "EDITOR"};
+
+    private void mapButtonRect(int i, RectF out) {
+        float bw = w * 0.26f, bh = h * 0.1f;
+        float cxb = w * (0.2f + i * 0.3f);
+        out.set(cxb - bw / 2, h * 0.84f, cxb + bw / 2, h * 0.84f + bh);
     }
 
     private float ttBtnR(RectF card) {
@@ -602,6 +844,22 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             openSettings(ST_MAP);
             return;
         }
+        for (int i = 0; i < MAP_BUTTONS.length; i++) {
+            mapButtonRect(i, uiRect);
+            if (!uiRect.contains(x, y)) continue;
+            sfx.play(Sfx.SELECT);
+            if (i == 0) {
+                state = ST_SHOP;
+                shopSel = -1;
+            } else if (i == 1) {
+                state = ST_ACH;
+            } else {
+                editor.loadSlot(editor.slot);
+                state = ST_EDITOR;
+            }
+            stateT = 0f;
+            return;
+        }
         for (int i = 0; i < Levels.ALL.length; i++) {
             cardRect(i, uiRect);
             if (!uiRect.contains(x, y)) continue;
@@ -611,7 +869,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             }
             sfx.play(Sfx.SELECT);
             float r = ttBtnR(uiRect);
-            boolean tt = save.completed(i) && dist(x, y, uiRect.right - r * 1.25f, uiRect.top + r * 1.25f) < r * 1.4f;
+            boolean tt = !Levels.ALL[i].tutorial && save.completed(i)
+                    && dist(x, y, uiRect.right - r * 1.25f, uiRect.top + r * 1.25f) < r * 1.4f;
             startLevel(i, tt);
             return;
         }
@@ -686,7 +945,132 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             sfx.play(Sfx.SELECT);
             if (i == 0) state = ST_PLAY;
             else if (i == 1) openSettings(ST_PAUSE);
+            else if (custom) enterEditor();
             else enterMap();
+            return;
+        }
+    }
+
+    private void editorAction(int act) {
+        switch (act) {
+            case Editor.ACT_BACK:
+                sfx.play(Sfx.SELECT);
+                editor.saveSlot();
+                enterMap();
+                break;
+            case Editor.ACT_PLAY: {
+                Level.Def def = editor.toDef();
+                if (def != null) {
+                    editor.saveSlot();
+                    sfx.play(Sfx.SELECT);
+                    startDef(def, -1, false, true);
+                } else {
+                    sfx.play(Sfx.HURT);
+                }
+                break;
+            }
+            case Editor.ACT_COPY: {
+                final String text = editor.serialize();
+                post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                            cm.setPrimaryClip(ClipData.newPlainText("Bandi Rush", text));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                });
+                editor.showMsg("Level disalin ke clipboard - bagikan ke temanmu!");
+                sfx.play(Sfx.SELECT);
+                break;
+            }
+            case Editor.ACT_PASTE:
+                post(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            ClipboardManager cm = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                            ClipData clip = cm.getPrimaryClip();
+                            if (clip != null && clip.getItemCount() > 0) {
+                                CharSequence cs = clip.getItemAt(0).coerceToText(getContext());
+                                pendingPaste = cs == null ? "" : cs.toString();
+                            } else {
+                                pendingPaste = "";
+                            }
+                        } catch (Exception e) {
+                            pendingPaste = "";
+                        }
+                    }
+                });
+                sfx.play(Sfx.SELECT);
+                break;
+            default:
+                break;
+        }
+    }
+
+    // ---------------- toko ----------------
+
+    private void shopCardRect(int i, RectF out) {
+        int cols = 5;
+        float m = w * 0.02f;
+        float top = h * 0.18f;
+        float cw = (w - m * (cols + 1)) / cols;
+        float chh = h * 0.34f;
+        int col = i % cols, row = i / cols;
+        float x = m + col * (cw + m), y = top + row * (chh + h * 0.03f);
+        out.set(x, y, x + cw, y + chh);
+    }
+
+    private boolean isEquipped(Shop.Item it) {
+        return (it.kind == Shop.KIND_CHAR && save.selChar == it.id)
+                || (it.kind == Shop.KIND_COSTUME && save.selCostume == it.id);
+    }
+
+    private void shopTap(float x, float y) {
+        for (int i = 0; i < Shop.ITEMS.length; i++) {
+            shopCardRect(i, uiRect);
+            if (!uiRect.contains(x, y)) continue;
+            Shop.Item it = Shop.ITEMS[i];
+            shopSel = i;
+            boolean wearable = it.kind == Shop.KIND_CHAR || it.kind == Shop.KIND_COSTUME;
+            if (wearable && save.owns(i)) {
+                if (it.kind == Shop.KIND_CHAR) save.selChar = it.id;
+                else save.selCostume = it.id;
+                sfx.play(Sfx.SELECT);
+                showMsg("Dipakai: " + it.name);
+            } else if (it.kind == Shop.KIND_MASK && save.startMasks >= Shop.MAX_START_MASKS) {
+                sfx.play(Sfx.HURT);
+                showMsg("Topeng awal sudah penuh (" + Shop.MAX_START_MASKS + ")");
+            } else if (save.bank < it.price) {
+                sfx.play(Sfx.HURT);
+                showMsg("Wumpa kurang! Butuh " + it.price);
+            } else {
+                save.bank -= it.price;
+                sfx.play(Sfx.LIFE);
+                showMsg("Dibeli: " + it.name);
+                switch (it.kind) {
+                    case Shop.KIND_CHAR:
+                        save.owned |= 1 << i;
+                        save.selChar = it.id;
+                        break;
+                    case Shop.KIND_COSTUME:
+                        save.owned |= 1 << i;
+                        save.selCostume = it.id;
+                        save.addStat(Save.ST_COSTUMES, 1);
+                        break;
+                    case Shop.KIND_MASK:
+                        save.startMasks++;
+                        break;
+                    default:
+                        lives++;
+                        break;
+                }
+            }
+            skin = Shop.skin(save.selChar, save.selCostume);
+            save.flush();
+            checkAchievements();
             return;
         }
     }
@@ -986,6 +1370,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             mag = 1f;
         }
         boolean held = touchJumpHeld || kJump;
+        boolean riding = level.mode == Level.MODE_RIDE;
+        if (riding) {
+            // babi berlari sendiri: hanya bisa geser kiri-kanan dan lompat
+            slideNow = false;
+            spinNow = false;
+        }
 
         // mulai meluncur
         if (slideNow && p.grounded && p.slideT <= 0f && p.slideCd <= 0f && p.spinT <= 0f) {
@@ -1019,8 +1409,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 q.color = 0xCCE0D0B0;
                 q.life = q.maxLife = 0.35f;
             }
+        } else if (riding) {
+            p.vx += (ix * RIDE_SIDE_SPEED - p.vx) * Math.min(1f, 10f * dt);
+            p.vz += (RIDE_SPEED - p.vz) * Math.min(1f, 4f * dt);
         } else {
-            float target = RUN_SPEED * (p.longJump ? LONG_JUMP_FACTOR : 1f);
+            float target = runSpeed * (p.longJump ? LONG_JUMP_FACTOR : 1f);
             float acc = p.grounded ? 14f : (p.longJump ? 2.5f : 7f);
             float k = Math.min(1f, acc * dt);
             p.vx += (ix * target - p.vx) * k;
@@ -1028,7 +1421,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         float sp = (float) Math.sqrt(p.vx * p.vx + p.vz * p.vz);
         p.moving = sp > 0.6f;
-        if (p.moving && p.slideT <= 0f) p.facing = (float) Math.atan2(p.vx, p.vz);
+        if (riding) p.facing = 0f;
+        else if (p.moving && p.slideT <= 0f) p.facing = (float) Math.atan2(p.vx, p.vz);
         p.runPhase += sp * dt * 3.4f;
 
         if (jumpNow && !p.jumping && (p.grounded || p.airT < 0.12f) && !underBarrier()) {
@@ -1036,11 +1430,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 p.longJump = true; // luncur + lompat = lompat jauh
                 p.slideT = 0f;
             }
-            p.vy = JUMP_V;
+            p.vy = jumpV;
             p.grounded = false;
             p.jumping = true;
             p.standingOn = null;
             p.airT = 1f;
+            save.addStat(Save.ST_JUMPS, 1);
             sfx.play(Sfx.JUMP);
         }
         if (p.jumping && !held && p.vy > 3f) p.vy = 3f; // lompatan pendek kalau tombol cepat dilepas
@@ -1140,9 +1535,18 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             if (!blocksSide(e)) continue;
             if (Math.abs(p.x - e.x) >= sHX + PR) continue;
             if (Math.abs(nz - e.z) < sHZ + PR) {
-                if (e.type == Entity.NITRO) {
+                if (e.type == Entity.NITRO || (e.type == Entity.TNT && level.mode == Level.MODE_RIDE)) {
                     explode(e);
                     continue;
+                }
+                if (level.mode == Level.MODE_RIDE && p.z < e.z) {
+                    // babi menerjang peti kayu, tapi menabrak peti besi / palang = celaka
+                    if (e.isBreakable()) {
+                        breakCrate(e);
+                        continue;
+                    }
+                    killPlayer(false);
+                    return;
                 }
                 nz = p.z < e.z ? e.z - sHZ - PR : e.z + sHZ + PR;
                 p.vz = 0f;
@@ -1302,14 +1706,19 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void interactions() {
         boolean spinning = p.spinT > 0f;
-        boolean sliding = p.slideT > 0f;
+        boolean sliding = p.slideT > 0f || level.mode == Level.MODE_RIDE; // babi tunggangan menerjang musuh
         for (int i = 0, n = level.entities.size(); i < n && state == ST_PLAY; i++) {
             Entity e = level.entities.get(i);
             if (!e.alive) continue;
             float dx = e.x - p.x, dz = e.z - p.z;
             float d2 = dx * dx + dz * dz;
 
-            if (e.type == Entity.WUMPA) {
+            if (e.type == Entity.PAD) {
+                if (!inBonus && curDef.bonus != null && p.grounded && Math.abs(dx) < 0.45f && Math.abs(dz) < 0.45f) {
+                    enterBonus(e);
+                    return;
+                }
+            } else if (e.type == Entity.WUMPA) {
                 float wy = e.y + 0.45f;
                 if (Math.abs(dx) < 0.55f && Math.abs(dz) < 0.55f && wy > p.y - 0.1f && wy < p.y + 1.25f) {
                     e.alive = false;
@@ -1325,6 +1734,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     if (p.vy < -1f && p.y > 0.15f) {
                         e.dieMode = Entity.DIE_SQUASH;
                         e.dieT = 0f;
+                        save.addStat(Save.ST_ENEMIES, 1);
                         bounce(BOUNCE_V + 1f);
                         sfx.play(Sfx.STOMP);
                     } else {
@@ -1351,6 +1761,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
         e.dieMode = Entity.DIE_KNOCK;
         e.dieT = 0f;
+        save.addStat(Save.ST_ENEMIES, 1);
         e.vx = dx / d * 7f;
         e.vz = dz / d * 7f + 3f * camDir;
         e.vy = 7f;
@@ -1359,6 +1770,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void addWumpa(int n) {
         wumpa += n;
+        bankGain += n;
+        save.addStat(Save.ST_WUMPA, n);
         while (wumpa >= 100) {
             wumpa -= 100;
             lives++;
@@ -1376,6 +1789,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (!e.alive) return;
         e.alive = false;
         broken++;
+        save.addStat(Save.ST_CRATES, 1);
         switch (e.type) {
             case Entity.QCRATE:
                 addWumpa(5);
@@ -1392,7 +1806,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 sfx.play(Sfx.LIFE);
                 break;
             case Entity.CHECK:
-                if (!ttMode) {
+                if (!ttMode && !inBonus) {
                     checkX = e.x;
                     checkZ = e.z;
                 }
@@ -1419,6 +1833,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (!e.alive) return;
         e.alive = false;
         broken++;
+        save.addStat(Save.ST_CRATES, 1);
         sfx.play(Sfx.BOOM);
         Particle ring = spawn(Particle.RING, e.x, e.y + 0.45f, e.z);
         ring.size = EXPLODE_R + 0.4f;
@@ -1466,6 +1881,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         dieFall = fall;
         p.spinT = 0f;
         p.slideT = 0f;
+        diedThisLevel = true;
+        save.addStat(Save.ST_DEATHS, 1);
         sfx.play(Sfx.DIE);
         vibe(200);
         if (!fall) burst(p.x, p.y + 0.5f, p.z, 0xFFFFFFFF, 14, 3f);
@@ -1594,16 +2011,38 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
     private void render(Canvas c) {
         cv = c;
+        ui.cv = c;
         focal = h * 0.95f;
         cx = w * 0.5f;
         cy = h * 0.40f;
         sprites.fogColor = level.theme.fog;
 
-        drawSky();
-        drawWorld();
-        drawParticles();
-        drawHud();
+        if (state == ST_EDITOR) {
+            editor.draw(c, w, h, time);
+        } else {
+            drawSky();
+            drawWorld();
+            drawParticles();
+            drawHud();
+        }
+        drawToast();
         cv = null;
+    }
+
+    private void drawToast() {
+        if (toasts.isEmpty() || toastT <= 0f) return;
+        float u = h * 0.01f;
+        float slide = Math.min(1f, Math.min(3f - toastT, toastT) * 4f);
+        float top = -u * 14 + slide * u * 16;
+        rect.set(w * 0.3f, top, w * 0.7f, top + u * 12);
+        fill.setColor(0xE6202020);
+        cv.drawRoundRect(rect, u * 3, u * 3, fill);
+        stroke.setColor(0xFFFFC107);
+        stroke.setStrokeWidth(u * 0.5f);
+        cv.drawRoundRect(rect, u * 3, u * 3, stroke);
+        ui.trophy(rect.left + u * 7, rect.centerY(), u * 3.5f, true);
+        outlined("PENCAPAIAN TERBUKA!", rect.left + u * 13, top + u * 5, u * 3.6f, 0xFFFFC107, Paint.Align.LEFT);
+        outlined(toasts.get(0), rect.left + u * 13, top + u * 9.8f, u * 4.6f, 0xFFFFFFFF, Paint.Align.LEFT);
     }
 
     private void drawSky() {
@@ -1870,6 +2309,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             case Entity.BOULDER: drawBoulder(); break;
             case Entity.BOSS: drawBoss(); break;
             case Entity.BOMB: drawBomb(e); break;
+            case Entity.PAD: drawPad(e); break;
             default:
                 if (e.isCrate()) drawCrate(e);
                 break;
@@ -2084,6 +2524,20 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         cv.drawPath(path, fill);
     }
 
+    /** Pintu area bonus: petak bercahaya dengan tanda tanya melayang. */
+    private void drawPad(Entity e) {
+        float pulse = 0.5f + 0.5f * (float) Math.sin(time * 5f);
+        int glow = Color.argb(255, 64 + (int) (pulse * 100), 200 + (int) (pulse * 55), 255);
+        quad(e.x - 0.45f, 0.02f, e.z - 0.45f, e.x + 0.45f, 0.02f, e.z - 0.45f,
+                e.x + 0.45f, 0.02f, e.z + 0.45f, e.x - 0.45f, 0.02f, e.z + 0.45f, glow);
+        quad(e.x - 0.28f, 0.03f, e.z - 0.28f, e.x + 0.28f, 0.03f, e.z - 0.28f,
+                e.x + 0.28f, 0.03f, e.z + 0.28f, e.x - 0.28f, 0.03f, e.z + 0.28f, 0xFFFFFFFF);
+        float bob = (float) Math.sin(time * 3f) * 0.1f;
+        if (!project(e.x, 1.1f + bob, e.z)) return;
+        outlined("?", pX, pY + pS * 0.2f, pS * 0.6f, 0xFF80DEEA, Paint.Align.CENTER);
+        outlined("BONUS", pX, pY + pS * 0.45f, pS * 0.2f, 0xFFFFFFFF, Paint.Align.CENTER);
+    }
+
     private void drawWumpa(Entity e) {
         float bob = (float) Math.sin(time * 3f + e.phase) * 0.08f;
         float wy = e.y + 0.45f + bob;
@@ -2235,15 +2689,23 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 cv.translate(0, -stateT * 0.8f);
                 cv.rotate(stateT * 420f, 0, -0.5f);
             }
+            boolean riding = level.mode == Level.MODE_RIDE && state != ST_TITLE;
+            if (riding) {
+                cv.save();
+                cv.scale(1.4f, 1.4f);
+                sprites.hogBack(cv, time);
+                cv.restore();
+                cv.translate(0f, -0.62f);
+            }
             if (p.spinT > 0f) {
-                sprites.tornado(cv, time);
+                sprites.tornado(cv, skin, time);
             } else {
                 // arah hadap relatif terhadap kamera
                 float rel = p.facing + (camDir < 0 ? (float) Math.PI : 0f);
                 float fc = (float) Math.cos(rel), fs = (float) Math.sin(rel);
                 int view = fc > 0.5f ? Sprites.VIEW_BACK : fc < -0.5f ? Sprites.VIEW_FRONT : Sprites.VIEW_SIDE;
-                boolean air = !p.grounded && state == ST_PLAY;
-                sprites.bandi(cv, view, fs < 0f, air, p.moving, p.runPhase, time, p.slideT > 0f);
+                boolean air = riding || (!p.grounded && state == ST_PLAY);
+                sprites.bandi(cv, skin, view, fs < 0f, air, p.moving, p.runPhase, time, p.slideT > 0f);
             }
             cv.restore();
         }
@@ -2366,6 +2828,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             case ST_TITLE: drawTitle(); return;
             case ST_MAP: drawMap(); return;
             case ST_SETTINGS: drawSettings(); return;
+            case ST_SHOP: drawShop(); return;
+            case ST_ACH: drawAchievements(); return;
             default: break;
         }
         float u = h * 0.01f;
@@ -2378,14 +2842,27 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         outlined(String.valueOf(wumpa), u * 11, u * 9.6f, u * 7, 0xFFFFFFFF, Paint.Align.LEFT);
 
         // peti
-        if (level.totalCrates > 0) {
+        if (levelTotal > 0 && level.mode != Level.MODE_BOSS) {
             float bx = u * 30;
             fill.setColor(0xFFC07A3A);
             cv.drawRect(bx - u * 3, u * 4, bx + u * 3, u * 10, fill);
             stroke.setColor(0xFF6B3E1A);
             stroke.setStrokeWidth(u * 0.7f);
             cv.drawRect(bx - u * 2.3f, u * 4.7f, bx + u * 2.3f, u * 9.3f, stroke);
-            outlined(broken + "/" + level.totalCrates, bx + u * 5, u * 9.6f, u * 7, 0xFFFFFFFF, Paint.Align.LEFT);
+            outlined(broken + "/" + levelTotal, bx + u * 5, u * 9.6f, u * 7, 0xFFFFFFFF, Paint.Align.LEFT);
+            if (inBonus) outlined("AREA BONUS", bx - u * 3, u * 15, u * 4, 0xFF80DEEA, Paint.Align.LEFT);
+        }
+
+        // petunjuk tutorial
+        if (state == ST_PLAY && !inBonus && tipIdx >= 0) {
+            String tip = level.def.tipTexts[tipIdx];
+            float a = Math.min(1f, tipT * 3f);
+            text.setTextSize(u * 4.4f);
+            float tw = text.measureText(tip) + u * 8;
+            rect.set(w * 0.5f - tw / 2, h * 0.14f, w * 0.5f + tw / 2, h * 0.14f + u * 8);
+            fill.setColor(((int) (a * 200) << 24) | 0x0D2B45);
+            cv.drawRoundRect(rect, u * 2, u * 2, fill);
+            outlined(tip, w * 0.5f, h * 0.14f + u * 5.5f, u * 4.4f, ((int) (a * 255) << 24) | 0xFFFFFF, Paint.Align.CENTER);
         }
 
         // nyawa atau stopwatch
@@ -2429,7 +2906,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 int col = ((int) (a * 255) << 24) | 0xFFD54F;
                 outlined(level.name + (ttMode ? "  -  TIME TRIAL" : ""), w * 0.5f, h * 0.27f, u * 9, col, Paint.Align.CENTER);
             }
-            if (hintT > 0f && level.def.hint != null) {
+            if (hintT > 0f && level.def.hint != null && tipIdx < 0) {
                 float a = Math.min(1f, hintT);
                 int col = ((int) (a * 255) << 24) | 0xFFFFFF;
                 outlined(level.def.hint, w * 0.5f, h * 0.34f, u * 4.5f, col, Paint.Align.CENTER);
@@ -2450,12 +2927,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 pauseBtnRect(1, uiRect);
                 drawButton(uiRect, "PENGATURAN", 0xCC1565C0);
                 pauseBtnRect(2, uiRect);
-                drawButton(uiRect, "KE PETA", 0xCCC62828);
+                drawButton(uiRect, custom ? "KE EDITOR" : "KE PETA", 0xCCC62828);
                 break;
             case ST_DONE: {
                 dim();
-                outlined("LEVEL SELESAI!", w * 0.5f, h * 0.26f, u * 12, 0xFFFFD54F, Paint.Align.CENTER);
-                if (ttMode) {
+                outlined(curDef.tutorial ? "TUTORIAL SELESAI!" : "LEVEL SELESAI!", w * 0.5f, h * 0.26f, u * 12, 0xFFFFD54F, Paint.Align.CENTER);
+                if (custom || curDef.tutorial) {
+                    outlined(custom ? "Level buatanmu berhasil ditamatkan!" : "Sekarang kamu siap menjelajahi Pulau Wumpa!",
+                            w * 0.5f, h * 0.42f, u * 6, 0xFFFFFFFF, Paint.Align.CENTER);
+                    outlined("Peti: " + broken + " / " + levelTotal + "     Wumpa: " + wumpa,
+                            w * 0.5f, h * 0.52f, u * 5, 0xFFE0E0E0, Paint.Align.CENTER);
+                } else if (ttMode) {
                     outlined("Waktu: " + formatTime(ttTime), w * 0.5f, h * 0.4f, u * 8, 0xFFFFFFFF, Paint.Align.CENTER);
                     float best = save.best(levelIndex);
                     outlined(ttNewRecord ? "REKOR BARU!" : "Rekor: " + formatTime(best),
@@ -2464,8 +2946,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     outlined(relicName(ttRelic) + "  (target " + formatTime(level.def.targetTime) + ")",
                             w * 0.5f - u * 16, h * 0.6f, u * 5, relicColor(ttRelic), Paint.Align.LEFT);
                 } else {
-                    String info = level.totalCrates > 0
-                            ? "Peti: " + broken + " / " + level.totalCrates + "     Wumpa: " + wumpa
+                    String info = levelTotal > 0 && level.mode != Level.MODE_BOSS
+                            ? "Peti: " + broken + " / " + levelTotal + "     Wumpa: " + wumpa
                             : "Wumpa: " + wumpa;
                     outlined(info, w * 0.5f, h * 0.42f, u * 6, 0xFFFFFFFF, Paint.Align.CENTER);
                     if (gemThisLevel) {
@@ -2477,7 +2959,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                     }
                 }
                 if (stateT > 1f && ((int) (time * 2) & 1) == 0) {
-                    outlined("Ketuk untuk lanjut", w * 0.5f, h * 0.76f, u * 5.5f, 0xFFFFFFFF, Paint.Align.CENTER);
+                    outlined(custom ? "Ketuk untuk kembali ke editor" : "Ketuk untuk lanjut",
+                            w * 0.5f, h * 0.76f, u * 5.5f, 0xFFFFFFFF, Paint.Align.CENTER);
                 }
                 break;
             }
@@ -2488,9 +2971,9 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 break;
             case ST_WIN: {
                 dim();
-                int n = Levels.ALL.length;
+                int n = Levels.progressCount();
                 outlined("TAMAT! KAMU MENANG!", w * 0.5f, h * 0.34f, u * 12, 0xFFFFD54F, Paint.Align.CENTER);
-                outlined("Kristal: " + save.totalGems(n) + " / " + n + "     Relik: " + save.totalRelics(n) + " / " + n,
+                outlined("Kristal: " + save.totalGems(Levels.ALL) + " / " + n + "     Relik: " + save.totalRelics(Levels.ALL) + " / " + n,
                         w * 0.5f, h * 0.5f, u * 6, 0xFFFFFFFF, Paint.Align.CENTER);
                 outlined("Coba Time Trial untuk mengumpulkan relik emas!", w * 0.5f, h * 0.6f, u * 4.5f, 0xFFE0E0E0, Paint.Align.CENTER);
                 if (stateT > 1f) outlined("Ketuk untuk kembali ke peta", w * 0.5f, h * 0.72f, u * 5.5f, 0xFFFFFFFF, Paint.Align.CENTER);
@@ -2541,8 +3024,17 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         float u = h * 0.01f;
         fill.setColor(0x88000000);
         cv.drawRect(0, 0, w, h, fill);
-        outlined("PILIH LEVEL", w * 0.5f, h * 0.12f, u * 9, 0xFFFFD54F, Paint.Align.CENTER);
+        outlined("PILIH LEVEL", w * 0.5f, h * 0.115f, u * 8, 0xFFFFD54F, Paint.Align.CENTER);
         drawCornerButtons();
+        int pc = Levels.progressCount();
+        ui.wumpa(w * 0.66f, h * 0.085f, u * 2.2f);
+        outlined(String.valueOf(save.bank), w * 0.68f, h * 0.1f, u * 4.5f, 0xFFFFFFFF, Paint.Align.LEFT);
+        outlined("Kristal " + save.totalGems(Levels.ALL) + "/" + pc + "   Relik " + save.totalRelics(Levels.ALL) + "/" + pc,
+                h * 0.16f, h * 0.1f, u * 3.8f, 0xFFE0E0E0, Paint.Align.LEFT);
+        for (int i = 0; i < MAP_BUTTONS.length; i++) {
+            mapButtonRect(i, uiRect);
+            drawButton(uiRect, MAP_BUTTONS[i], i == 0 ? 0xCCEF6C00 : i == 1 ? 0xCCF9A825 : 0xCC00838F);
+        }
 
         int n = Levels.ALL.length;
         for (int i = 0; i < n; i++) {
@@ -2560,14 +3052,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             cv.drawRoundRect(uiRect, rr, rr, stroke);
 
             int dot = d.name.indexOf(". ");
-            String num = dot > 0 ? d.name.substring(0, dot) : String.valueOf(i + 1);
+            String num = dot > 0 ? d.name.substring(0, dot) : d.tutorial ? "T" : String.valueOf(i);
             String nm = dot > 0 ? d.name.substring(dot + 2) : d.name;
             float lx = uiRect.left + u * 3;
             outlined(num, lx, uiRect.top + uiRect.height() * 0.36f, uiRect.height() * 0.28f,
                     open ? 0xFFFFFFFF : 0xFF9E9E9E, Paint.Align.LEFT);
             outlined(nm, lx, uiRect.top + uiRect.height() * 0.6f, uiRect.height() * 0.13f,
                     open ? 0xFFFFF59D : 0xFF9E9E9E, Paint.Align.LEFT);
-            String tag = d.mode == Level.MODE_BOSS ? "BOS" : d.mode == Level.MODE_CHASE ? "KEJAR" : "";
+            String tag = d.mode == Level.MODE_BOSS ? "BOS" : d.mode == Level.MODE_CHASE ? "KEJAR"
+                    : d.mode == Level.MODE_RIDE ? "TUNGGANG" : d.bonus != null ? "+BONUS" : "";
             if (!tag.isEmpty()) {
                 outlined(tag, uiRect.left + uiRect.width() * 0.3f, uiRect.top + uiRect.height() * 0.3f,
                         uiRect.height() * 0.11f, 0xFFFF8A80, Paint.Align.LEFT);
@@ -2583,6 +3076,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 cv.drawArc(rect, 180, 180, false, stroke);
                 fill.setColor(0xFFBDBDBD);
                 cv.drawRect(gx - gs, gy - gs * 0.5f, gx + gs, gy + gs * 0.9f, fill);
+                continue;
+            }
+            if (d.tutorial) {
+                outlined(save.completed(i) ? "SELESAI" : "Mulai di sini!", lx, uiRect.top + uiRect.height() * 0.86f,
+                        uiRect.height() * 0.11f, save.completed(i) ? 0xFF76FF03 : 0xFFFFFFFF, Paint.Align.LEFT);
                 continue;
             }
 
@@ -2613,9 +3111,110 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 drawStopwatch(bx, by, r * 0.6f, 0xFFFFFFFF);
             }
         }
-        outlined("Kristal: " + save.totalGems(n) + "/" + n + "      Relik: " + save.totalRelics(n) + "/" + n
-                        + "      Ketuk kartu = main,  tombol jam = Time Trial",
-                w * 0.5f, h * 0.965f, u * 4, 0xFFE0E0E0, Paint.Align.CENTER);
+    }
+
+    private void drawShop() {
+        float u = h * 0.01f;
+        fill.setColor(0xAA000000);
+        cv.drawRect(0, 0, w, h, fill);
+        ui.backButton(h * 0.08f, h * 0.08f, h * 0.055f);
+        outlined("TOKO", w * 0.5f, h * 0.115f, u * 8, 0xFFFFD54F, Paint.Align.CENTER);
+        ui.wumpa(w * 0.8f, h * 0.085f, u * 2.5f);
+        outlined(String.valueOf(save.bank), w * 0.82f, h * 0.105f, u * 5.5f, 0xFFFFFFFF, Paint.Align.LEFT);
+
+        for (int i = 0; i < Shop.ITEMS.length; i++) {
+            Shop.Item it = Shop.ITEMS[i];
+            shopCardRect(i, uiRect);
+            boolean wearable = it.kind == Shop.KIND_CHAR || it.kind == Shop.KIND_COSTUME;
+            boolean owned = wearable && save.owns(i);
+            boolean equipped = wearable && isEquipped(it);
+            float rr = uiRect.height() * 0.08f;
+            fill.setColor(i == shopSel ? 0xE6263238 : 0xCC1C2A33);
+            cv.drawRoundRect(uiRect, rr, rr, fill);
+            stroke.setColor(equipped ? 0xFFFFC107 : 0x88FFFFFF);
+            stroke.setStrokeWidth(equipped ? u * 0.8f : u * 0.4f);
+            cv.drawRoundRect(uiRect, rr, rr, stroke);
+
+            // pratinjau
+            float pcx = uiRect.centerX(), pby = uiRect.top + uiRect.height() * 0.6f;
+            float ps = uiRect.height() * 0.44f;
+            cv.save();
+            cv.translate(pcx, pby);
+            cv.scale(ps, ps);
+            if (it.kind == Shop.KIND_CHAR) {
+                sprites.bandi(cv, Shop.skin(it.id, save.selCostume), Sprites.VIEW_FRONT, false, false, false, 0f, time, false);
+            } else if (it.kind == Shop.KIND_COSTUME) {
+                sprites.bandi(cv, Shop.skin(save.selChar, it.id), Sprites.VIEW_FRONT, false, false, false, 0f, time, false);
+            } else if (it.kind == Shop.KIND_MASK) {
+                cv.translate(0f, -0.5f);
+                cv.scale(1.6f, 1.6f);
+                sprites.mask(cv, false);
+            }
+            cv.restore();
+            if (it.kind == Shop.KIND_LIFE) {
+                fill.setColor(0xFFF57C00);
+                cv.drawCircle(pcx, pby - ps * 0.45f, ps * 0.3f, fill);
+                fill.setColor(0xFFFFE0B2);
+                rect.set(pcx - ps * 0.2f, pby - ps * 0.42f, pcx + ps * 0.2f, pby - ps * 0.22f);
+                cv.drawOval(rect, fill);
+                outlined("+1", pcx + ps * 0.35f, pby - ps * 0.1f, ps * 0.35f, 0xFF76FF03, Paint.Align.CENTER);
+            }
+
+            outlined(it.name, pcx, uiRect.top + uiRect.height() * 0.76f, uiRect.height() * 0.1f, 0xFFFFFFFF, Paint.Align.CENTER);
+            float sy = uiRect.top + uiRect.height() * 0.92f;
+            float ts = uiRect.height() * 0.09f;
+            if (equipped) {
+                outlined("DIPAKAI", pcx, sy, ts, 0xFF76FF03, Paint.Align.CENTER);
+            } else if (owned) {
+                outlined("PAKAI", pcx, sy, ts, 0xFF80DEEA, Paint.Align.CENTER);
+            } else {
+                String price = String.valueOf(it.price);
+                if (it.kind == Shop.KIND_MASK) price += "  (" + save.startMasks + "/" + Shop.MAX_START_MASKS + ")";
+                if (it.kind == Shop.KIND_LIFE) price += "  (x" + lives + ")";
+                ui.wumpa(pcx - ts * (price.length() * 0.3f + 0.6f), sy - ts * 0.35f, ts * 0.4f);
+                outlined(price, pcx + ts * 0.3f, sy, ts, save.bank >= it.price ? 0xFFFFFFFF : 0xFFFF8A80, Paint.Align.CENTER);
+            }
+        }
+        String info = shopSel >= 0 ? Shop.ITEMS[shopSel].desc : "Wumpa yang kamu kumpulkan di level tersimpan di sini. Ketuk barang untuk membeli / memakai.";
+        outlined(info, w * 0.5f, h * 0.965f, u * 4, 0xFFE0E0E0, Paint.Align.CENTER);
+        if (msgT > 0f) {
+            fill.setColor(0xCC000000);
+            cv.drawRect(0, h * 0.45f, w, h * 0.55f, fill);
+            outlined(msg, w * 0.5f, h * 0.52f, u * 5, 0xFFFFF176, Paint.Align.CENTER);
+        }
+    }
+
+    private void drawAchievements() {
+        float u = h * 0.01f;
+        fill.setColor(0xCC000000);
+        cv.drawRect(0, 0, w, h, fill);
+        ui.backButton(h * 0.08f, h * 0.08f, h * 0.055f);
+        int got = 0;
+        for (int i = 0; i < Achievements.NAMES.length; i++) if (save.hasAch(i)) got++;
+        outlined("PENCAPAIAN  " + got + "/" + Achievements.NAMES.length, w * 0.5f, h * 0.115f, u * 7, 0xFFFFD54F, Paint.Align.CENTER);
+
+        int cols = 3;
+        float m = w * 0.02f, top = h * 0.17f;
+        float cw = (w - m * (cols + 1)) / cols, chh = h * 0.13f;
+        for (int i = 0; i < Achievements.NAMES.length; i++) {
+            int col = i % cols, row = i / cols;
+            float x = m + col * (cw + m), y = top + row * (chh + h * 0.012f);
+            boolean done = save.hasAch(i);
+            rect.set(x, y, x + cw, y + chh);
+            fill.setColor(done ? 0xCC33691E : 0xAA263238);
+            cv.drawRoundRect(rect, chh * 0.15f, chh * 0.15f, fill);
+            ui.trophy(x + chh * 0.5f, y + chh * 0.5f, chh * 0.3f, done);
+            outlined(Achievements.NAMES[i], x + chh, y + chh * 0.45f, chh * 0.27f,
+                    done ? 0xFFFFFFFF : 0xFFB0BEC5, Paint.Align.LEFT);
+            outlined(Achievements.DESCS[i], x + chh, y + chh * 0.8f, chh * 0.2f,
+                    done ? 0xFFDCEDC8 : 0xFF90A4AE, Paint.Align.LEFT);
+        }
+        int[] st = save.stats;
+        int mins = st[Save.ST_PLAYTIME] / 60;
+        outlined("Peti: " + st[Save.ST_CRATES] + "   Wumpa: " + st[Save.ST_WUMPA] + "   Musuh: " + st[Save.ST_ENEMIES]
+                        + "   Lompatan: " + st[Save.ST_JUMPS] + "   Mati: " + st[Save.ST_DEATHS]
+                        + "   Waktu main: " + (mins / 60) + "j " + (mins % 60) + "m",
+                w * 0.5f, h * 0.975f, u * 3.6f, 0xFFE0E0E0, Paint.Align.CENTER);
     }
 
     private void drawSettings() {
@@ -2719,6 +3318,12 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 break;
             }
             case MotionEvent.ACTION_MOVE:
+                if (state == ST_EDITOR) {
+                    dragX = ev.getX(0);
+                    dragY = ev.getY(0);
+                    dragQueued = true;
+                    break;
+                }
                 for (int i = 0; i < ev.getPointerCount(); i++) {
                     if (ev.getPointerId(i) == joyId) moveJoystick(ev.getX(i), ev.getY(i));
                 }
@@ -2888,6 +3493,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 tapX = w * 0.5f;
                 tapY = h * 0.9f;
                 break;
+            case ST_SHOP:
+            case ST_ACH:
+            case ST_EDITOR:
+                backQueued = true;
+                return;
             default:
                 tapX = w * 0.5f;
                 tapY = h * 0.5f;

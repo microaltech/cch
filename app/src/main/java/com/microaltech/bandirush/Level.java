@@ -13,13 +13,13 @@ import java.util.ArrayList;
  *   '2' / '3' tumpukan 2 / 3 peti kayu    '!' peti "!"        'U' palang rendah (harus meluncur)
  *   'o' peti bergaris (jadi peti kayu setelah "!" diaktifkan)
  *   'O' peti bergaris di atas jurang (jadi peti besi / batu loncatan)
- *   'X' posisi bos
+ *   'X' posisi bos                    'P' pintu area bonus (butuh Def.bonus)
  *   'w' wumpa melayang di atas jurang     'm' pijakan bergerak di atas jurang
  *   'i' peti besi di atas jurang          'b' peti pantul di atas jurang
  */
 final class Level {
 
-    static final int MODE_NORMAL = 0, MODE_CHASE = 1, MODE_BOSS = 2;
+    static final int MODE_NORMAL = 0, MODE_CHASE = 1, MODE_BOSS = 2, MODE_RIDE = 3;
 
     static final class Def {
         final String name;
@@ -29,6 +29,10 @@ final class Level {
         final float targetTime; // target Time Trial untuk relik emas (detik)
         final String hint;
         final String[] map; // ditulis dari ujung (atas) ke awal (bawah)
+        int[] tipRows = new int[0];
+        String[] tipTexts = new String[0];
+        Def bonus;
+        boolean tutorial;
 
         Def(String name, Theme theme, int mode, int music, float targetTime, String hint, String... map) {
             this.name = name;
@@ -38,6 +42,29 @@ final class Level {
             this.targetTime = targetTime;
             this.hint = hint;
             this.map = map;
+        }
+
+        /** Petunjuk yang muncul saat pemain melewati baris tertentu, format "baris:teks". */
+        Def tips(String... tips) {
+            tipRows = new int[tips.length];
+            tipTexts = new String[tips.length];
+            for (int i = 0; i < tips.length; i++) {
+                int colon = tips[i].indexOf(':');
+                tipRows[i] = Integer.parseInt(tips[i].substring(0, colon).trim());
+                tipTexts[i] = tips[i].substring(colon + 1).trim();
+            }
+            return this;
+        }
+
+        /** Area bonus yang dimasuki lewat petak 'P'. */
+        Def bonus(Def b) {
+            bonus = b;
+            return this;
+        }
+
+        Def tutorial() {
+            tutorial = true;
+            return this;
         }
     }
 
@@ -110,6 +137,7 @@ final class Level {
                     }
                     case 'H': add(Entity.HOG, x, 0f, z, r, c); break;
                     case 'm': add(Entity.PLATFORM, x, 0f, z, r, c); break;
+                    case 'P': add(Entity.PAD, x, 0f, z, r, c); break;
                     default: break;
                 }
             }

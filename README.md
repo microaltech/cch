@@ -26,13 +26,35 @@ mengumpulkan buah wumpa, kabur dari batu raksasa, dan melawan Raja Kepiting.
 - Kepala Bandi yang membentur peti dari bawah juga menghancurkannya.
 - Musuh kepiting & babi hutan, pijakan bergerak, wumpa melayang.
 
-### Level (6)
-1. **Hutan Wumpa**: pengenalan.
+### Level (tutorial + 7)
+- **Tutorial**: mengajarkan semua gerakan satu per satu lewat petunjuk yang muncul di layar. Tidak mengurangi nyawa.
+1. **Hutan Wumpa**: pengenalan, dengan **area bonus** tersembunyi.
 2. **Jembatan Senja**: jurang, pijakan bergerak, peti besi, peti pantul.
 3. **Kuil TNT**: malam hari, penuh TNT & Nitro.
-4. **Puncak Salju**: meluncur, lompat jauh, peti bertumpuk, peti "!".
-5. **Kejaran Batu**: kamera berbalik, Bandi berlari *ke arah layar* dikejar batu raksasa.
-6. **Raja Kepiting** (bos): hindari bom yang dilempar dan terjangannya. Saat bos menabrak dinding dan pusing, putar, injak, atau luncur ke arahnya. Butuh 3 pukulan.
+4. **Puncak Salju**: meluncur, lompat jauh, peti bertumpuk, peti "!", dengan area bonus.
+5. **Tunggangan Babi**: menunggangi babi hutan yang berlari sendiri. Geser kiri-kanan dan lompat. Babi menerjang peti kayu dan musuh, tapi menabrak peti besi berarti celaka.
+6. **Kejaran Batu**: kamera berbalik, Bandi berlari *ke arah layar* dikejar batu raksasa.
+7. **Raja Kepiting** (bos): hindari bom yang dilempar dan terjangannya. Saat bos menabrak dinding dan pusing, putar, injak, atau luncur ke arahnya. Butuh 3 pukulan.
+
+### Area bonus
+Injak petak **BONUS** yang bercahaya untuk masuk ke area rahasia penuh peti. Jatuh di area bonus tidak mengurangi nyawa, kamu hanya kembali ke level utama dan bisa mencoba lagi. Peti di area bonus ikut dihitung untuk kristal.
+
+### Toko & kostum
+Semua wumpa yang dikumpulkan masuk ke tabungan dan bisa dibelanjakan di **Toko**:
+- Karakter kedua, **Nia**: lompat lebih tinggi, lari sedikit lebih pelan.
+- 5 kostum: Pantai (kacamata hitam), Ninja (ikat kepala), Musim Dingin (syal), Raja (mahkota), dan Emas.
+- **Topeng Awal**: mulai level berikutnya dengan topeng pelindung (bisa disimpan sampai 3).
+- **Nyawa +1**.
+
+### Pencapaian & statistik
+15 pencapaian (mis. *Tukang Kayu*: hancurkan 100 peti, *Tak Tersentuh*: selesaikan level tanpa mati, *Arsitek*: tamatkan level buatanmu). Notifikasi muncul saat pencapaian terbuka. Layar pencapaian juga menampilkan statistik: peti, wumpa, musuh, lompatan, kematian, dan waktu main.
+
+### Editor level
+Buat level sendiri langsung di HP:
+- Grid dilihat dari atas. Pilih petak dari palet, lalu ketuk atau seret di grid untuk menggambar.
+- 3 slot simpanan, lebar 5 atau 7, tambah/kurangi baris, dan pilih tema (Hutan, Senja, Kuil, Salju, Pantai).
+- **Uji Main** untuk langsung memainkan levelnya (tanpa kehilangan nyawa).
+- **Salin / Tempel**: level disalin sebagai teks ke clipboard, jadi bisa dibagikan lewat chat dan ditempel di HP lain.
 
 ### Progres & mode
 - **Peta level**: level berikutnya terbuka setelah level sebelumnya selesai. Progres tersimpan otomatis.
@@ -80,8 +102,13 @@ Kebutuhan: JDK 17+, Android SDK Platform 34. Aplikasi berjalan di Android 5.0 (A
 ```
 app/src/main/java/com/microaltech/bandirush/
 ├── MainActivity.java  Activity layar penuh (landscape, imersif)
-├── GameView.java      Loop game, fisika, kamera, renderer 3D-semu, bos, batu, HUD, menu, input
-├── Sprites.java       Gambar karakter: Bandi, kepiting/bos, babi hutan, topeng
+├── GameView.java      Loop game, fisika, kamera, renderer 3D-semu, bos, batu, bonus, HUD, menu, input
+├── Editor.java        Editor level di dalam game
+├── Sprites.java       Gambar karakter: Bandi/Nia + kostum, kepiting/bos, babi hutan, topeng
+├── Shop.java          Barang toko, karakter & kostum
+├── Skin.java          Warna & aksesori karakter
+├── Achievements.java  Daftar pencapaian
+├── Ui.java            Alat gambar menu (teks, tombol, ikon)
 ├── Level.java         Parser peta berbasis teks + legenda karakter
 ├── Levels.java        Data 6 level
 ├── Entity.java        Peti, wumpa, musuh, pijakan, palang, bom, finish
@@ -89,7 +116,7 @@ app/src/main/java/com/microaltech/bandirush/
 ├── Boss.java          Status bos Raja Kepiting
 ├── Particle.java      Serpihan, ledakan, kilau
 ├── Theme.java         Palet warna tiap dunia
-├── Save.java          Progres & pengaturan (SharedPreferences)
+├── Save.java          Progres, tabungan wumpa, statistik, level buatan & pengaturan (SharedPreferences)
 ├── Music.java         Musik latar sintetis (AudioTrack streaming)
 └── Sfx.java           Efek suara sintetis (AudioTrack)
 ```
@@ -115,8 +142,10 @@ new Level.Def("7. Nama Level", Theme.JUNGLE, Level.MODE_NORMAL, Music.JUNGLE,
         "..S..")                  // ... baris bawah = awal
 ```
 
-Semua baris harus sama panjang. Mode: `MODE_NORMAL`, `MODE_CHASE` (dikejar batu, butuh `G`),
-`MODE_BOSS` (butuh `X` untuk posisi bos, tanpa `G`). Legenda:
+Semua baris harus sama panjang. Mode: `MODE_NORMAL`, `MODE_RIDE` (tunggangan babi), `MODE_CHASE`
+(dikejar batu, butuh `G`), `MODE_BOSS` (butuh `X` untuk posisi bos, tanpa `G`).
+Tambahan opsional: `.bonus(new Level.Def(...))` untuk area bonus (masuk lewat petak `P`), dan
+`.tips("12:Teks petunjuk", ...)` untuk petunjuk yang muncul saat pemain melewati baris tertentu. Legenda:
 
 ```
 .  tanah            (spasi) jurang       S  posisi awal        G  finish
@@ -125,7 +154,7 @@ A  peti topeng      T  TNT               N  Nitro              K  checkpoint
 I  peti besi        W  wumpa             E  kepiting           H  babi hutan
 2  tumpukan 2 peti  3  tumpukan 3 peti   !  peti "!"           U  palang rendah (harus meluncur)
 o  peti bergaris    O  peti bergaris di atas jurang (jadi peti besi)
-X  posisi bos
+X  posisi bos        P  pintu area bonus
 w  wumpa melayang di atas jurang         m  pijakan bergerak di atas jurang
 i  peti besi di atas jurang              b  peti pantul di atas jurang
 ```

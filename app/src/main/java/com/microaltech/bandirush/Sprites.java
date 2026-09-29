@@ -13,9 +13,6 @@ import android.graphics.RectF;
 final class Sprites {
     static final int VIEW_BACK = 0, VIEW_FRONT = 1, VIEW_SIDE = 2;
 
-    private static final int C_ORANGE = 0xFFF57C00, C_TAN = 0xFFFFE0B2, C_JEANS = 0xFF1E5AA8,
-            C_SHOE = 0xFFD32F2F, C_GLOVE = 0xFF5D4037, C_HAIR = 0xFF3E2723;
-
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
@@ -41,9 +38,9 @@ final class Sprites {
         return (color & 0xFF000000) | (r << 16) | (g << 8) | b;
     }
 
-    // ------------------------------------------------------------------ Bandi
+    // ------------------------------------------------------------------ Bandi / Nia
 
-    void bandi(Canvas cv, int view, boolean mirror, boolean air, boolean moving, float runPhase,
+    void bandi(Canvas cv, Skin sk, int view, boolean mirror, boolean air, boolean moving, float runPhase,
                float time, boolean sliding) {
         if (sliding) cv.scale(1.15f, 0.55f);
         if (view == VIEW_SIDE && mirror) cv.scale(-1f, 1f);
@@ -52,8 +49,8 @@ final class Sprites {
 
         // kaki
         stroke.setStrokeWidth(0.13f);
-        stroke.setColor(C_JEANS);
-        fill.setColor(C_SHOE);
+        stroke.setColor(sk.girl ? sk.fur : sk.pants);
+        fill.setColor(sk.shoe);
         float lfx, lfy, rfx, rfy;
         if (view == VIEW_SIDE) {
             lfx = sw * 0.16f;
@@ -81,22 +78,28 @@ final class Sprites {
         cv.drawOval(rect, fill);
 
         // badan
-        fill.setColor(C_JEANS);
+        fill.setColor(sk.pants);
         rect.set(-0.17f, -0.52f + idle, 0.17f, -0.34f);
         cv.drawOval(rect, fill);
-        fill.setColor(C_ORANGE);
+        fill.setColor(sk.fur);
         rect.set(-0.17f, -0.76f + idle, 0.17f, -0.42f + idle);
         cv.drawOval(rect, fill);
-        if (view == VIEW_FRONT) {
-            fill.setColor(C_TAN);
+        if (sk.girl) {
+            // baju terusan
+            fill.setColor(sk.pants);
+            rect.set(-0.15f, -0.66f + idle, 0.15f, -0.4f);
+            cv.drawRect(rect, fill);
+        }
+        if (view == VIEW_FRONT && !sk.girl) {
+            fill.setColor(sk.tan);
             rect.set(-0.09f, -0.66f + idle, 0.09f, -0.45f + idle);
             cv.drawOval(rect, fill);
         }
 
         // tangan
-        stroke.setColor(C_ORANGE);
+        stroke.setColor(sk.fur);
         stroke.setStrokeWidth(0.08f);
-        fill.setColor(C_GLOVE);
+        fill.setColor(sk.glove);
         float lhx, lhy, rhx, rhy;
         if (air) {
             lhx = -0.3f;
@@ -124,16 +127,39 @@ final class Sprites {
         cv.drawCircle(lhx, lhy, 0.06f, fill);
         cv.drawCircle(rhx, rhy, 0.06f, fill);
 
+        if (sk.acc == Skin.ACC_SCARF) {
+            fill.setColor(0xFFE53935);
+            rect.set(-0.15f, -0.78f + idle, 0.15f, -0.68f + idle);
+            cv.drawOval(rect, fill);
+            rect.set(view == VIEW_SIDE ? -0.2f : 0.04f, -0.74f + idle, view == VIEW_SIDE ? -0.1f : 0.12f, -0.52f + idle);
+            cv.drawRect(rect, fill);
+        }
+
         // kepala
         float hy = -0.9f + idle;
-        fill.setColor(C_ORANGE);
+        if (sk.girl && view != VIEW_FRONT) {
+            // kuncir rambut di belakang kepala
+            fill.setColor(sk.hair);
+            float px = view == VIEW_SIDE ? -0.2f : 0f;
+            rect.set(px - 0.07f, hy - 0.02f, px + 0.07f, hy + 0.3f);
+            cv.drawOval(rect, fill);
+        }
+        fill.setColor(sk.fur);
         cv.drawCircle(-0.15f, hy - 0.12f, 0.06f, fill);
         cv.drawCircle(0.15f, hy - 0.12f, 0.06f, fill);
         cv.drawCircle(0, hy, 0.18f, fill);
-        hairTuft(cv, hy);
+        if (sk.girl) {
+            fill.setColor(sk.hair);
+            rect.set(-0.17f, hy - 0.2f, 0.17f, hy - 0.02f);
+            cv.drawArc(rect, 180, 180, true, fill);
+            fill.setColor(0xFFEC407A);
+            cv.drawCircle(0.11f, hy - 0.17f, 0.04f, fill);
+        } else if (sk.acc != Skin.ACC_CROWN) {
+            hairTuft(cv, sk, hy);
+        }
 
         if (view == VIEW_FRONT) {
-            fill.setColor(C_TAN);
+            fill.setColor(sk.tan);
             rect.set(-0.14f, hy + 0.02f, 0.14f, hy + 0.17f);
             cv.drawOval(rect, fill);
             fill.setColor(0xFFFFFFFF);
@@ -153,8 +179,15 @@ final class Sprites {
             stroke.setStrokeWidth(0.022f);
             rect.set(-0.08f, hy + 0.04f, 0.08f, hy + 0.14f);
             cv.drawArc(rect, 20, 140, false, stroke);
+            if (sk.acc == Skin.ACC_SHADES) {
+                fill.setColor(0xFF111111);
+                rect.set(-0.14f, hy - 0.09f, -0.01f, hy + 0.01f);
+                cv.drawRoundRect(rect, 0.03f, 0.03f, fill);
+                rect.set(0.01f, hy - 0.09f, 0.14f, hy + 0.01f);
+                cv.drawRoundRect(rect, 0.03f, 0.03f, fill);
+            }
         } else if (view == VIEW_SIDE) {
-            fill.setColor(C_TAN);
+            fill.setColor(sk.tan);
             rect.set(0.02f, hy - 0.03f, 0.31f, hy + 0.14f);
             cv.drawOval(rect, fill);
             fill.setColor(0xFF000000);
@@ -169,11 +202,44 @@ final class Sprites {
             stroke.setColor(0xFF8D1B1B);
             stroke.setStrokeWidth(0.02f);
             cv.drawLine(0.12f, hy + 0.1f, 0.24f, hy + 0.09f, stroke);
+            if (sk.acc == Skin.ACC_SHADES) {
+                fill.setColor(0xFF111111);
+                rect.set(0.03f, hy - 0.1f, 0.17f, hy + 0.01f);
+                cv.drawRoundRect(rect, 0.03f, 0.03f, fill);
+            }
+        }
+
+        if (sk.acc == Skin.ACC_HEADBAND) {
+            fill.setColor(0xFFD32F2F);
+            rect.set(-0.18f, hy - 0.11f, 0.18f, hy - 0.05f);
+            cv.drawRect(rect, fill);
+            if (view != VIEW_FRONT) {
+                float bx = view == VIEW_SIDE ? -0.18f : 0f;
+                stroke.setColor(0xFFD32F2F);
+                stroke.setStrokeWidth(0.04f);
+                float flap = (float) Math.sin(time * 12f) * 0.04f;
+                cv.drawLine(bx, hy - 0.08f, bx - 0.12f, hy + 0.02f + flap, stroke);
+                cv.drawLine(bx, hy - 0.08f, bx - 0.08f, hy + 0.08f - flap, stroke);
+            }
+        } else if (sk.acc == Skin.ACC_CROWN) {
+            fill.setColor(0xFFFFC107);
+            path.reset();
+            path.moveTo(-0.13f, hy - 0.12f);
+            path.lineTo(-0.15f, hy - 0.3f);
+            path.lineTo(-0.06f, hy - 0.2f);
+            path.lineTo(0f, hy - 0.33f);
+            path.lineTo(0.06f, hy - 0.2f);
+            path.lineTo(0.15f, hy - 0.3f);
+            path.lineTo(0.13f, hy - 0.12f);
+            path.close();
+            cv.drawPath(path, fill);
+            fill.setColor(0xFFE91E63);
+            cv.drawCircle(0f, hy - 0.17f, 0.025f, fill);
         }
     }
 
-    private void hairTuft(Canvas cv, float hy) {
-        fill.setColor(C_HAIR);
+    private void hairTuft(Canvas cv, Skin sk, float hy) {
+        fill.setColor(sk.hair);
         path.reset();
         path.moveTo(-0.06f, hy - 0.15f);
         path.lineTo(-0.01f, hy - 0.29f);
@@ -186,19 +252,20 @@ final class Sprites {
         cv.drawPath(path, fill);
     }
 
-    void tornado(Canvas cv, float time) {
+    void tornado(Canvas cv, Skin sk, float time) {
         float a = time * 30f;
         for (int i = 0; i < 6; i++) {
             float y = -0.08f - i * 0.15f;
             float hw = 0.26f + 0.08f * (float) Math.sin(a * 0.7f + i * 1.3f) + (i == 2 || i == 3 ? 0.06f : 0f);
             boolean alt = (((int) (a / Math.PI) + i) & 1) == 0;
-            fill.setColor(i < 2 ? (alt ? C_JEANS : 0xFF3F7BD1) : (alt ? C_ORANGE : 0xFFFFA040));
+            int base = i < 2 ? sk.pants : sk.fur;
+            fill.setColor(alt ? base : lighten(base));
             rect.set(-hw, y - 0.1f, hw, y + 0.1f);
             cv.drawOval(rect, fill);
         }
-        fill.setColor(C_ORANGE);
+        fill.setColor(sk.fur);
         cv.drawCircle(0, -0.95f, 0.15f, fill);
-        hairTuft(cv, -0.93f);
+        hairTuft(cv, sk, -0.93f);
         stroke.setColor(0xCCFFFFFF);
         stroke.setStrokeWidth(0.03f);
         for (int k = 0; k < 3; k++) {
@@ -207,6 +274,41 @@ final class Sprites {
             rect.set(-0.5f, yy - 0.12f, 0.5f, yy + 0.12f);
             cv.drawArc(rect, st, 110f, false, stroke);
         }
+    }
+
+    private static int lighten(int c) {
+        int r = Math.min(255, Color.red(c) + 50), g = Math.min(255, Color.green(c) + 50), b = Math.min(255, Color.blue(c) + 50);
+        return (c & 0xFF000000) | (r << 16) | (g << 8) | b;
+    }
+
+    /** Babi tunggangan dilihat dari belakang. */
+    void hogBack(Canvas cv, float t) {
+        float step = (float) Math.sin(t * 18f) * 0.05f;
+        fill.setColor(0xFF3E2723);
+        rect.set(-0.3f, -0.25f + step, -0.17f, 0f);
+        cv.drawRect(rect, fill);
+        rect.set(0.17f, -0.25f - step, 0.3f, 0f);
+        cv.drawRect(rect, fill);
+        fill.setColor(0xFF795548);
+        rect.set(-0.4f, -0.62f, 0.4f, -0.16f);
+        cv.drawOval(rect, fill);
+        fill.setColor(0xFF4E342E);
+        rect.set(-0.09f, -0.64f, 0.09f, -0.3f);
+        cv.drawOval(rect, fill);
+        path.reset();
+        path.moveTo(-0.3f, -0.55f);
+        path.lineTo(-0.36f, -0.74f);
+        path.lineTo(-0.18f, -0.6f);
+        path.close();
+        path.moveTo(0.3f, -0.55f);
+        path.lineTo(0.36f, -0.74f);
+        path.lineTo(0.18f, -0.6f);
+        path.close();
+        cv.drawPath(path, fill);
+        stroke.setColor(0xFFF48FB1);
+        stroke.setStrokeWidth(0.03f);
+        rect.set(-0.05f, -0.34f, 0.05f, -0.24f);
+        cv.drawArc(rect, 0, 300, false, stroke);
     }
 
     void mask(Canvas cv, boolean doubled) {

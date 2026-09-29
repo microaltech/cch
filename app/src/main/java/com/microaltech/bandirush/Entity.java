@@ -24,6 +24,7 @@ final class Entity {
     static final int BOULDER = 70;  // batu raksasa (hanya untuk gambar)
     static final int BOSS = 80;     // proxy gambar bos
     static final int BOMB = 90;     // bom lemparan bos
+    static final int PAD = 100;     // pintu masuk area bonus
 
     static final int DIE_NONE = 0, DIE_KNOCK = 1, DIE_SQUASH = 2;
 
