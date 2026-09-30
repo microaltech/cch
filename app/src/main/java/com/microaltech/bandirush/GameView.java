@@ -2678,13 +2678,15 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private void drawTorch(float x, float z) {
         if (!project(x, WALL_H, z)) return;
         float bx = pX, by = pY, s = pS, zc = pZc;
+        // obor yang terlalu dekat kamera tampil raksasa dan menutupi HUD: tidak digambar
+        if (zc < 5f) return;
         addLight(bx, by - 1.2f * s, 1.7f * s);
         stroke.setColor(fog(0xFF5D5470, zc));
         stroke.setStrokeWidth(0.35f * s);
         cv.drawLine(bx, by, bx, by - 1.0f * s, stroke);
         float fl = 1f + 0.15f * (float) Math.sin(time * 18f + z);
         fill.setColor(0x55FF9800);
-        cv.drawCircle(bx, by - 1.25f * s, 0.55f * s * fl, fill);
+        cv.drawCircle(bx, by - 1.25f * s, Math.min(0.55f * s, h * 0.05f) * fl, fill);
         fill.setColor(0xFFFF9800);
         cv.drawCircle(bx, by - 1.2f * s, 0.22f * s * fl, fill);
         fill.setColor(0xFFFFEB3B);
@@ -3323,11 +3325,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
 
         // nyawa atau stopwatch
         float lx = w - u * 34;
+        // teks di kanan atas dirapatkan ke kanan tapi berhenti sebelum tombol jeda
+        float rightEdge = pauseBx - h * 0.07f;
         if (ttMode || runMode == RUN_DAILY) {
-            drawStopwatch(lx, u * 7, u * 3.5f, 0xFFFFFFFF);
-            outlined(formatTime(ttTime), lx + u * 4.5f, u * 9.6f, u * 7, 0xFFFFEB3B, Paint.Align.LEFT);
+            String t = formatTime(ttTime);
+            text.setTextSize(u * 7);
+            float tw = text.measureText(t);
+            drawStopwatch(rightEdge - tw - u * 4.5f, u * 7, u * 3.5f, 0xFFFFFFFF);
+            outlined(t, rightEdge, u * 9.6f, u * 7, 0xFFFFEB3B, Paint.Align.RIGHT);
         } else if (runMode == RUN_ENDLESS) {
-            outlined((int) Math.max(0f, runMaxZ - level.startZ) + " m", lx + u * 16, u * 9.6f, u * 7, 0xFFFFEB3B, Paint.Align.RIGHT);
+            outlined((int) Math.max(0f, runMaxZ - level.startZ) + " m", rightEdge, u * 9.6f, u * 7, 0xFFFFEB3B, Paint.Align.RIGHT);
         } else {
             fill.setColor(0xFFF57C00);
             cv.drawCircle(lx, u * 7, u * 3.2f, fill);
