@@ -54,8 +54,11 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
     private static final float JUMP_V = 8.8f;
     private static final float BOUNCE_V = 7.5f;
     private static final float SUPER_BOUNCE_V = 12.5f;
-    private static final float AIR_SPIN_V = 6.5f;
-    private static final float LONG_JUMP_FACTOR = 1.55f;
+    private static final float AIR_SPIN_V = 8f;
+    private static final float LONG_JUMP_FACTOR = 1.65f;
+    private static final float COYOTE_TIME = 0.16f;      // masih boleh lompat sesaat setelah melewati tepi
+    private static final float JUMP_BUFFER = 0.15f;      // tombol lompat yang ditekan sedikit terlalu cepat
+    private static final float SLIDE_JUMP_GRACE = 0.25f; // lompat jauh setelah luncuran habis
     private static final float PR = 0.28f;           // radius Bandi
     private static final float PLAYER_H = 0.95f, SLIDE_H = 0.45f;
     private static final float CH = 0.45f;           // setengah ukuran peti
@@ -518,6 +521,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         jumpV = Shop.jumpV(save.selChar);
         diedThisLevel = false;
         tipIdx = -1;
+        hintedGapRow = -1;
         p.reset(level.startX, level.startZ);
         checkX = level.startX;
         checkZ = level.startZ;
@@ -893,6 +897,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         }
 
         runMaxZ = Math.max(runMaxZ, p.z);
+        checkWideGapHint();
         if (level.def.water && p.y < WATER_Y - 0.1f) {
             // tercebur ke air
             burst(p.x, WATER_Y, p.z, 0xDDB3E5FC, 18, 4f);
@@ -910,6 +915,35 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
             return;
         }
         updateCamera(dt);
+    }
+
+    private int hintedGapRow = -1;
+
+    /**
+     * Kalau Bandi mendekati jurang yang terlalu lebar untuk lompatan biasa (>= 4 petak) dan tidak ada
+     * pijakan bantu di dalamnya, tampilkan cara menyeberang. Sekali per jurang.
+     */
+    private void checkWideGapHint() {
+        if (camDir < 0 || !p.grounded || level.def.tipRows.length > 0) return;
+        int r = (int) Math.floor(p.z);
+        int c = Math.round(p.x + (level.width - 1) * 0.5f);
+        for (int ahead = 1; ahead <= 2; ahead++) {
+            int start = r + ahead;
+            if (start == hintedGapRow || level.groundAt(start, c) || start >= level.rows) continue;
+            int len = 0;
+            while (start + len < level.rows && !level.groundAt(start + len, c)) len++;
+            if (len < 4 || start + len >= level.rows) return;
+            for (int i = 0, n = level.entities.size(); i < n; i++) {
+                Entity e = level.entities.get(i);
+                if (!e.alive || e.z < start || e.z > start + len || Math.abs(e.x - level.colX(c)) > 1.5f) continue;
+                if (e.type == Entity.IRON || e.type == Entity.BOUNCE || e.type == Entity.PLATFORM
+                        || e.type == Entity.SINK || e.type == Entity.OUTLINE) return; // ada pijakan bantu
+            }
+            hintedGapRow = start;
+            msg = "Jurang lebar! Meluncur (▼) lalu lompat (X), atau lompat lalu putar (O) di udara";
+            msgT = 3.2f;
+            return;
+        }
     }
 
     private void updateCamera(float dt) {
@@ -1737,6 +1771,7 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         if (p.slideT > 0f) {
             p.slideT -= dt;
             if (p.slideT <= 0f && underBarrier()) p.slideT = 0.02f; // jangan berdiri di bawah palang
+            if (p.slideT <= 0f) p.slideGrace = SLIDE_JUMP_GRACE; // lompat jauh masih bisa sesaat setelah luncuran habis
             float k = Math.max(0f, p.slideT) / SLIDE_TIME;
             float spd = SLIDE_SPEED * (0.55f + 0.45f * k);
             p.vx = p.slideDirX * spd;
@@ -1766,10 +1801,16 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
         else if (p.moving && p.slideT <= 0f) p.facing = (float) Math.atan2(p.vx, p.vz);
         p.runPhase += sp * dt * 3.4f;
 
-        if (jumpNow && !p.jumping && (p.grounded || p.airT < 0.12f) && !underBarrier()) {
-            if (p.slideT > 0f) {
+        // tombol lompat "diingat" sebentar, jadi menekan sedikit terlalu cepat (sebelum mendarat) tetap terhitung
+        if (jumpNow) p.jumpBuf = JUMP_BUFFER;
+        else p.jumpBuf -= dt;
+        p.slideGrace -= dt;
+        if (p.jumpBuf > 0f && !p.jumping && (p.grounded || p.airT < COYOTE_TIME) && !underBarrier()) {
+            p.jumpBuf = 0f;
+            if (p.slideT > 0f || p.slideGrace > 0f) {
                 p.longJump = true; // luncur + lompat = lompat jauh
                 p.slideT = 0f;
+                p.slideGrace = 0f;
             }
             p.vy = jumpV;
             p.grounded = false;
@@ -3377,8 +3418,8 @@ public class GameView extends SurfaceView implements SurfaceHolder.Callback, Run
                 outlined(level.def.hint, w * 0.5f, h * 0.34f, u * 4.5f, col, Paint.Align.CENTER);
             }
             if (msgT > 0f) {
-                float rise = (1.6f - msgT) * u * 4;
-                outlined(msg, w * 0.5f, h * 0.42f - rise, u * 7, 0xFFFFF176, Paint.Align.CENTER);
+                float rise = Math.max(0f, Math.min(1.6f, 1.6f - msgT)) * u * 4;
+                outlined(msg, w * 0.5f, h * 0.42f - rise, fitSize(msg, u * 7, w * 0.92f), 0xFFFFF176, Paint.Align.CENTER);
             }
             drawControls();
         }

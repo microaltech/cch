@@ -12,6 +12,8 @@ final class Player {
     float spinT, spinCd;
     float slideT, slideCd;
     float slideDirX, slideDirZ;
+    float slideGrace;
+    float jumpBuf;
     float facing;
     float runPhase;
     boolean moving;
@@ -35,6 +37,8 @@ final class Player {
         spinCd = 0f;
         slideT = 0f;
         slideCd = 0f;
+        slideGrace = 0f;
+        jumpBuf = 0f;
         facing = 0f;
         runPhase = 0f;
         moving = false;

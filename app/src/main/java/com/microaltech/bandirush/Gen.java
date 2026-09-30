@@ -38,7 +38,8 @@ final class Gen {
     };
 
     private static final String[][] HARD = {
-            {".....", "  .  ", "     ", "     ", "     ", "     ", "  .  ", "....."},
+            // jurang lebar: wumpa melayang menunjukkan lintasan lompat jauh
+            {".....", ".....", "  .  ", "     ", "  w  ", "  w  ", "     ", "  .  ", "....."},
             {".....", "NN.NN", ".....", "..N..", "....."},
             {".....", "E.T.E", ".....", "....."},
             {".....", "  .  ", "  m  ", "     ", "  m  ", "     ", "  m  ", "  .  ", "....."},

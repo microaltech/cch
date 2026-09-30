@@ -116,6 +116,8 @@ final class Lang {
         x("PETI MUNCUL!", "CRATES APPEARED!");
         x("RAJA KEPITING KALAH!", "KING CRAB DEFEATED!");
         x("Progres dihapus", "Progress erased");
+        x("Jurang lebar! Meluncur (▼) lalu lompat (X), atau lompat lalu putar (O) di udara",
+                "Wide gap! Slide (▼) then jump (X), or jump then spin (O) in mid-air");
         x("Level ditempel dari clipboard!", "Level pasted from clipboard!");
         x("Teks di clipboard bukan level Bandi Rush", "Clipboard text is not a Bandi Rush level");
         x("Level disalin ke clipboard - bagikan ke temanmu!", "Level copied to clipboard - share it with friends!");
